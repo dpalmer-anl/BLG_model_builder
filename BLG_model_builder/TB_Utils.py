@@ -2,9 +2,17 @@ from scipy.spatial.distance import cdist
 import numpy as np
 from numba import njit
 import matplotlib.pyplot as plt
-import TETB_GRAPHENE.descriptors as descriptors
 from sympy import *
+try:
+    import cupy
 
+    if cupy.cuda.is_available():
+        np = cupy
+        gpu_avail = True
+    else:
+        gpu_avail = False
+except:
+    gpu_avail = False
 
 #########################################################################################
 
@@ -71,13 +79,39 @@ def norm(a):
         norms[i] = np.sqrt(sum)
     return norms
 
+##############################################################################
+
+#General slater koster matrix element
+
+##############################################################################
+def SK_pz_chebyshev(dR,params,aa = 0.529, b = 5.29177):
+    r = np.linalg.norm(dR, axis=1)
+    dRn = dR / r[:,np.newaxis]
+
+    l = dRn[:, 0]
+    m = dRn[:, 1]
+    n = dRn[:, 2]
+    Cpp_sigma = params[:10]
+    Cpp_pi = params[10:]
+    Vpp_sigma = SK_bond_ints(r,Cpp_sigma,aa = aa, b = b)
+    Vpp_pi = SK_bond_ints(r,Cpp_pi,aa = aa, b = b)
+
+    Ezz = n**2*Vpp_sigma + (1-n**2)*Vpp_pi
+    return Ezz
+
+def SK_bond_ints(r,params,aa = 0.529, b = 5.29177):
+    y = (2*r - (b+aa))/(b-aa)
+    bond_val =  np.polynomial.chebyshev.chebval(y, params)
+    bond_val  -= params[0]/2
+    return bond_val
+
 ###############################################################################
 
 # POPOV
 
 ###############################################################################
 #@njit
-def popov_hopping(dR,params=None):
+def popov_hopping(dR,params):
     """pairwise Slater Koster Interlayer hopping parameters for pz orbitals of carbon as parameterized by Popov, Van Alsenoy in
      "Low-frequency phonons of few-layer graphene within a tight-binding model". function is fully vectorized
 
@@ -87,26 +121,18 @@ def popov_hopping(dR,params=None):
     """
     dRn = np.linalg.norm(dR, axis=1)
     dRn = dR / dRn[:,np.newaxis]
-    eV_per_hart=27.2114
+
 
     l = dRn[:, 0]
     m = dRn[:, 1]
     n = dRn[:, 2]
     r = np.linalg.norm(dR,axis=1)
-    aa = 1.0  # [Bohr radii]
-    b = 10.0  # [Bohr radii]
+    aa = 1.0 *.529177   # [Bohr radii]
+    b = 10.0 *.529177  # [Bohr radii]
     y = (2.0 * r - (b + aa)) / (b - aa)
 
-    if params is None:
-        Cpp_sigma = np.array([0.1727212, -0.0937225, -0.0445544, 0.1114266,
-                            -0.0978079, 0.0577363, -0.0262833, 0.0094388,
-                                -0.0024695, 0.0003863])
-        Cpp_pi = np.array([-0.3969243, 0.3477657, -0.2357499, 0.1257478,
-                            -0.0535682, 0.0181983, -0.0046855, 0.0007303,
-                          0.0000225, -0.0000393])
-    else:
-        Cpp_sigma = params[0,:]
-        Cpp_pi = params[1,:]
+    Cpp_sigma = params[:10]
+    Cpp_pi = params[10:]
     Vpp_sigma =  np.polynomial.chebyshev.chebval(y, Cpp_sigma) 
     Vpp_pi =  np.polynomial.chebyshev.chebval(y, Cpp_pi) 
 
@@ -114,9 +140,9 @@ def popov_hopping(dR,params=None):
     Vpp_pi -= Cpp_pi[0] / 2
     Ezz = n**2 * Vpp_sigma + (1 - n**2) * Vpp_pi
     valmat = Ezz
-    return valmat*eV_per_hart
+    return valmat
 
-def popov_overlap(dR,params=None):
+def popov_overlap(dR,params):
     """pairwise Slater Koster Interlayer overlap parameters for pz orbitals of carbon as parameterized by Popov, Van Alsenoy in
      "Low-frequency phonons of few-layer graphene within a tight-binding model". function is fully vectorized
 
@@ -131,32 +157,22 @@ def popov_overlap(dR,params=None):
     m = dRn[:, 1]
     n = dRn[:, 2]
     r = np.linalg.norm(dR,axis=1)
-    r = np.clip(r, 1, 10)
-  
-    #%boundaries for polynomial
+    
 
-    aa = 1 #; %Angstrom
-    b = 10 #; %Angstrom
-    y = (2*r-(b+aa))/(b-aa)
-    #orignally sigma
-    if params is None:
-        Cpp_sigma=np.array([-0.0571487, -0.0291832, 0.1558650, -0.1665997,
-                            0.0921727, -0.0268106, 0.0002240, 0.0040319,
-                            -0.0022450, 0.0005596])
-        Cpp_pi=   np.array([0.3797305, -0.3199876, 0.1897988, -0.0754124,
-                            0.0156376, 0.0025976, -0.0039498, 0.0020581,
-                            -0.0007114, 0.0001427])
-    else:
-        Cpp_sigma = params[0,:]
-        Cpp_pi = params[1,:]
+    aa = 1.0 * .529177  # [Bohr radii]
+    b = 10.0 * .529177  # [Bohr radii]
+    y = (2.0 * r - (b + aa)) / (b - aa)
 
+    Cpp_sigma = params[:10]
+    Cpp_pi = params[10:]
     Vpp_sigma =  np.polynomial.chebyshev.chebval(y, Cpp_sigma) 
     Vpp_pi =  np.polynomial.chebyshev.chebval(y, Cpp_pi) 
 
-    Vpp_sigma  -= Cpp_sigma[0]/2
-    Vpp_pi -= Cpp_pi[0]/2
-    Ezz = n**2*Vpp_sigma + (1-n**2)*Vpp_pi  #; %Changing only this as only
-    return Ezz #*eV_per_hart
+    Vpp_sigma -= Cpp_sigma[0] / 2
+    Vpp_pi -= Cpp_pi[0] / 2
+    Ezz = n**2 * Vpp_sigma + (1 - n**2) * Vpp_pi
+    valmat = Ezz
+    return valmat
 
 
 ####################################################################################################
@@ -165,7 +181,7 @@ def popov_overlap(dR,params=None):
 
 ####################################################################################################
 #@njit
-def porezag_hopping(dR,params=None):
+def porezag_hopping(dR,params):
     """pairwise Slater Koster hopping parameters for pz orbitals of carbon as parameterized by Porezag in
      "Construction of tight-binding-like potentials on the basis of density-functional theory: Application to carbon". function is fully vectorized
 
@@ -175,27 +191,18 @@ def porezag_hopping(dR,params=None):
     """
     dRn = np.linalg.norm(dR, axis=1)
     dRn = dR / dRn[:,np.newaxis]
-    eV_per_hart=27.2114
 
     l = dRn[:, 0]
     m = dRn[:, 1]
     n = dRn[:, 2]
     r = np.linalg.norm(dR,axis=1)
-    r = np.clip(r, 1, 7)
 
-    aa = 1.0  # [Bohr radii]
-    b = 7.0  # [Bohr radii]
+    aa = 1.0 * .529177  # [Bohr radii]
+    b = 10.0 * .529177  # [Bohr radii]
     y = (2.0 * r - (b + aa)) / (b - aa)
-    if params is None:
-        Cpp_sigma = np.array([0.2422701, -0.1315258, -0.0372696, 0.0942352,
-                            -0.0673216, 0.0316900, -0.0117293, 0.0033519, 
-                            -0.0004838, -0.0000906])
-        Cpp_pi = np.array([-0.3793837, 0.3204470, -0.1956799, 0.0883986, 
-                        -0.0300733, 0.0074465, -0.0008563, -0.0004453, 
-                        0.0003842, -0.0001855])
-    else:
-        Cpp_sigma = params[0,:]
-        Cpp_pi = params[1,:]
+
+    Cpp_sigma = params[:10]
+    Cpp_pi = params[10:]
     Vpp_sigma =  np.polynomial.chebyshev.chebval(y, Cpp_sigma) 
     Vpp_pi =  np.polynomial.chebyshev.chebval(y, Cpp_pi) 
 
@@ -203,9 +210,9 @@ def porezag_hopping(dR,params=None):
     Vpp_pi -= Cpp_pi[0] / 2
     Ezz = n**2 * Vpp_sigma + (1 - n**2) * Vpp_pi
     valmat = Ezz
-    return valmat*eV_per_hart
+    return valmat
 
-def porezag_overlap(dR,params=None):
+def porezag_overlap(dR,params):
     """pairwise Slater Koster overlap parameters for pz orbitals of carbon as parameterized by Porezag in
      "Construction of tight-binding-like potentials on the basis of density-functional theory: Application to carbon". function is fully vectorized
 
@@ -213,52 +220,45 @@ def porezag_overlap(dR,params=None):
 
     :returns: (np.ndarray [N,]) Overlap matrix elements [eV]
     """
-    eV_per_hart=27.2114
     dRn = np.linalg.norm(dR, axis=1)
-    #dRn = norm(dR)
     dRn = dR / dRn[:,np.newaxis]
-    eV_per_hart=27.2114
 
     l = dRn[:, 0]
     m = dRn[:, 1]
     n = dRn[:, 2]
-    #r = norm(dR)
     r = np.linalg.norm(dR,axis=1)
-    r = np.clip(r, 1, 7)
-    aa = 1 #; %Angstrom
 
-    b =7 #; %Angstrom
+    aa = 1.0 * .529177  # [Bohr radii]
+    b = 10.0 * .529177  # [Bohr radii]
+    y = (2.0 * r - (b + aa)) / (b - aa)
 
-    y = (2*r-(b+aa))/(b-aa)
-
-    
-    #overlap matrix coefficient (No units mentioned)
-    #originally sigma
-    if params is None:
-        Cpp_sigma=np.array([-0.1359608, 0.0226235, 0.1406440, -0.1573794,
-                                0.0753818, -0.0108677, -0.0075444, 0.0051533,
-                                -0.0013747, 0.0000751])
-        Cpp_pi=   np.array([0.3715732, -0.3070867, 0.1707304, -0.0581555,
-                                0.0061645, 0.0051460, -0.0032776, 0.0009119,
-                                -0.0001265, -0.000227])
-    else:
-        Cpp_sigma = params[0,:]
-        Cpp_pi = params[1,:]
+    Cpp_sigma = params[:10]
+    Cpp_pi = params[10:]
     Vpp_sigma =  np.polynomial.chebyshev.chebval(y, Cpp_sigma) 
     Vpp_pi =  np.polynomial.chebyshev.chebval(y, Cpp_pi) 
 
-    Vpp_sigma  -= Cpp_sigma[0]/2
-    Vpp_pi -= Cpp_pi[0]/2
-    Ezz = n**2*Vpp_sigma + (1-n**2)*Vpp_pi
-    return Ezz #*eV_per_hart
+    Vpp_sigma -= Cpp_sigma[0] / 2
+    Vpp_pi -= Cpp_pi[0] / 2
+    Ezz = n**2 * Vpp_sigma + (1 - n**2) * Vpp_pi
+    return Ezz 
 
 ###########################################################################################
 
 # Moon-Koshino
 
 ##########################################################################################
+def mk_hopping(descriptors,parameters):
+    r = np.linalg.norm(descriptors,axis=1)
+    [a,b,c] = parameters
+    a0 = 1.42
+    d0 = 3.35
+    n = (descriptors[:,2]) / r
+    V_p = a * np.exp(-b * (r - a0))
+    V_s = c * np.exp(-b * (r - d0))
+    hoppings = V_p*(1 - n**2) + V_s * n**2
+    return hoppings
 
-def mk_hopping(descriptors,parameters,grad=False):
+def mk_hopping_sympy(descriptors,parameters,grad=False):
     #descriptors = displacements
     #parameters = a,b,c
     ang_per_bohr = 0.529177249 # Ang/bohr radius
@@ -303,8 +303,12 @@ def mk_hopping(descriptors,parameters,grad=False):
 ################################################################################################
 
 def letb_intralayer(descriptors,parameters,grad=False):
-    distances = descriptors[4]
-    distances = np.sqrt(distances[0]**2 + distances[1]**2)
+    if type(parameters)==np.ndarray:
+        fit = {"t01":parameters[:2],"t02":parameters[2:6],"t03":parameters[6:]}
+    else:
+        fit = parameters 
+    distances = descriptors[3]
+    #distances = np.sqrt(distances[0]**2 + distances[1]**2)
     min_distance = min(distances)
 
     # NN should be within 5% of min_distance
@@ -319,7 +323,6 @@ def letb_intralayer(descriptors,parameters,grad=False):
     # Anything else, we zero out
     t00 = (distances < 0.95 * min_distance) | (distances > 1.05 * 2 * min_distance)
 
-    fit = parameters
     t01 = np.dot(descriptors[0], fit['t01'][1:]) + fit['t01'][0]
     t02 = np.dot(descriptors[1], fit['t02'][1:]) + fit['t02'][0]
     t03 = np.dot(descriptors[2], fit['t03'][1:]) + fit['t03'][0]
@@ -333,7 +336,7 @@ def letb_intralayer(descriptors,parameters,grad=False):
 def letb_interlayer(descriptors,parameters,grad=False):
     
     [a0, b0, c0, a3, b3, c3, a6, b6, c6, d6] = parameters
-    r, theta12, theta21 = descriptors[:,0],descriptors[:,1],descriptors[:,2]
+    r, theta12, theta21 = descriptors['dxy'],descriptors['theta_12'],descriptors['theta_21']
     r = r / 4.649 
 
     v0 = a0 * np.exp(-b0 * r ** 2) * np.cos(c0 * r)
@@ -341,9 +344,85 @@ def letb_interlayer(descriptors,parameters,grad=False):
     v6 =  a6 * np.exp(-b6 * (r - c6)**2) * np.sin(d6 * r)
     hoppings =  v0 
     hoppings += v3 * (np.cos(3 * theta12) + np.cos(3 * theta21))
-    hoppings += v6(r, a6, b6, c6, d6) * (np.cos(6 * theta12) + np.cos(6 * theta21))
-    
+    hoppings += v6 * (np.cos(6 * theta12) + np.cos(6 * theta21))
+
     return hoppings
+
+############################################################################################
+
+# Hellman-Feynman forces
+
+############################################################################################
+def get_hellman_feynman(atoms, eigvals,eigvec, kpoint):
+    """Calculate Hellman-feynman forces for a given system. Uses finite differences to calculate matrix elements derivatives 
+    
+    :params atomic_basis: (np.ndarray [Natoms,3]) positions of atoms in angstroms
+
+    :params layer_types: (np.ndarray [Natoms,]) atom types expressed as integers
+
+    :params lattice_vectors: (np.ndarray [3,3]) cell of system where cell[i, j] is the jth Cartesian coordinate of the ith cell vector
+
+    :params eigvals: (np.ndarray [natoms,]) band structure eigenvalues of system
+
+    :params eigvec: (np.ndarray [natoms,natoms]) eigenvectors of system
+
+    :params model_type: (str) specify which tight binding model to use. Options: [popov, mk]
+
+    :params kpoint: (np.ndarray [3,]) kpoint to build hamiltonian and overlap with
+
+    :returns: (np.ndarray [natoms,3]) tight binding forces on each atom"""
+    #get hellman_feynman forces at single kpoint. 
+    #dE/dR_i =  - Tr_i(rho_e *dS/dR_i + rho * dH/dR_i)
+    #construct density matrix
+    natoms = len(atoms)
+    nocc = natoms//2
+    fd_dist = 2*np.eye(natoms)
+    fd_dist[nocc:,nocc:] = 0
+    occ_eigvals = 2*np.diag(eigvals)
+    occ_eigvals[nocc:,nocc:] = 0
+    density_matrix =  eigvec @ fd_dist  @ np.conj(eigvec).T
+    energy_density_matrix = eigvec @ occ_eigvals @ np.conj(eigvec).T
+
+    Forces = np.zeros((natoms,3))
+
+    disp = get_disp(atoms)
+    phases = np.exp((1.0j)*np.dot(kpoint,disp.T))
+
+    #check gradients of hoppings via finite difference
+    grad_hop,hop_i,hop_j,hop_di,hop_dj = get_grad_hoppings(atoms)
+    grad_overlap = get_grad_hoppings(atoms)
+
+    delta = 1e-5
+    for dir_ind in range(3):
+        dr = np.zeros(3)
+        dr[dir_ind] +=  delta
+        hop_up = hopping_model(disp+dr[np.newaxis,:])
+        hop_dwn = hopping_model(disp-dr[np.newaxis,:])
+        grad_hop[:,dir_ind] = (hop_up - hop_dwn)/2/delta
+
+        overlap_up = overlap_model(disp+dr[np.newaxis,:])
+        overlap_dwn = overlap_model(disp-dr[np.newaxis,:])
+
+        grad_overlap[:,dir_ind] = (overlap_up - overlap_dwn)/2/delta
+
+    rho =  density_matrix[hop_i,hop_j][:,np.newaxis] 
+    energy_rho = energy_density_matrix[hop_i,hop_j][:,np.newaxis]
+    gradH = grad_hop * phases[:,np.newaxis] * rho
+    gradH += np.conj(gradH)
+    Pulay =  grad_overlap * phases[:,np.newaxis] * energy_rho
+    Pulay += np.conj(Pulay)
+
+    for atom_ind in range(natoms):
+        use_ind = np.squeeze(np.where(hop_i==atom_ind))
+        ave_gradH = gradH[use_ind,:]
+        ave_gradS = Pulay[use_ind,:] 
+        if ave_gradH.ndim!=2:
+            Forces[atom_ind,:] -= -ave_gradH.real 
+            Forces[atom_ind,:] -=   ave_gradS.real
+        else:
+            Forces[atom_ind,:] -= -np.sum(ave_gradH,axis=0).real 
+            Forces[atom_ind,:] -=   np.sum(ave_gradS,axis=0).real
+    return Forces
 
 ############################################################################################
 
@@ -387,18 +466,20 @@ def k_uniform_mesh(mesh_size):
     """
         
     # get the mesh size and checks for consistency
-    use_mesh=np.array(list(map(round,mesh_size)),dtype=int)
+    use_mesh=np.zeros(len(mesh_size))
+    for i in range(len(mesh_size)):
+        use_mesh[i] = mesh_size[i]
     # construct the mesh
     
     # get a mesh
     k_vec=np.mgrid[0:use_mesh[0],0:use_mesh[1],0:use_mesh[2]]
     # normalize the mesh
-    norm=np.tile(np.array(use_mesh,dtype=float),use_mesh)
-    norm=norm.reshape(use_mesh.tolist()+[3])
+    norm=np.tile(np.array(mesh_size,dtype=float),tuple(mesh_size))
+    norm=norm.reshape(mesh_size+(3,))
     norm=norm.transpose([3,0,1,2])
     k_vec=k_vec/norm
     # final reshape
-    k_vec=k_vec.transpose([1,2,3,0]).reshape([use_mesh[0]*use_mesh[1]*use_mesh[2],3])
+    k_vec=k_vec.transpose([1,2,3,0]).reshape([int(use_mesh[0]*use_mesh[1]*use_mesh[2]),3])
     return k_vec
 
 def k_path(sym_pts,nk,report=False):

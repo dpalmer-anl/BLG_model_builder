@@ -1,0 +1,7 @@
+A conda environment has been detected CONDA_PREFIX=
+/u/dpalmer3/.conda/envs/myenv 
+anaconda3_gpu is loaded. Consider running conda deactivate and reloading it.
+Traceback (most recent call last):
+  File "/u/dpalmer3/BLG_model_builder/tests/test_tb.py", line 6, in <module>
+    import BLG_model_builder
+ModuleNotFoundError: No module named 'BLG_model_builder'

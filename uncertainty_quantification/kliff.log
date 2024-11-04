@@ -1,0 +1,48 @@
+2024-09-23 14:52:13.977 | INFO     | KLIFF_LOSS:minimize:184 - Start minimization using method: L-BFGS-B.
+2024-09-23 14:52:13.979 | INFO     | KLIFF_LOSS:_scipy_optimize:301 - Running in serial mode.
+2024-09-23 14:55:05.320 | INFO     | KLIFF_LOSS:minimize:159 - Start minimization using method: L-BFGS-B.
+2024-09-23 14:55:05.320 | INFO     | KLIFF_LOSS:_scipy_optimize:276 - Running in serial mode.
+2024-09-23 14:55:26.191 | INFO     | KLIFF_LOSS:minimize:159 - Start minimization using method: L-BFGS-B.
+2024-09-23 14:55:26.192 | INFO     | KLIFF_LOSS:_scipy_optimize:276 - Running in serial mode.
+2024-09-23 14:56:25.524 | INFO     | KLIFF_LOSS:minimize:159 - Start minimization using method: L-BFGS-B.
+2024-09-23 14:56:25.524 | INFO     | KLIFF_LOSS:_scipy_optimize:276 - Running in serial mode.
+2024-09-23 14:57:03.405 | INFO     | KLIFF_LOSS:minimize:159 - Start minimization using method: L-BFGS-B.
+2024-09-23 14:57:03.406 | INFO     | KLIFF_LOSS:_scipy_optimize:276 - Running in serial mode.
+2024-09-23 14:57:33.944 | INFO     | KLIFF_LOSS:minimize:159 - Start minimization using method: L-BFGS-B.
+2024-09-23 14:57:33.944 | INFO     | KLIFF_LOSS:_scipy_optimize:276 - Running in serial mode.
+2024-09-23 15:00:09.085 | INFO     | KLIFF_LOSS:minimize:159 - Start minimization using method: L-BFGS-B.
+2024-09-23 15:00:09.085 | INFO     | KLIFF_LOSS:_scipy_optimize:276 - Running in serial mode.
+2024-09-23 15:05:46.980 | INFO     | KLIFF_LOSS:minimize:159 - Start minimization using method: L-BFGS-B.
+2024-09-23 15:05:46.980 | INFO     | KLIFF_LOSS:_scipy_optimize:276 - Running in serial mode.
+2024-09-23 15:08:49.500 | INFO     | KLIFF_LOSS:minimize:158 - Start minimization using method: L-BFGS-B.
+2024-09-23 15:08:49.500 | INFO     | KLIFF_LOSS:_scipy_optimize:275 - Running in serial mode.
+2024-09-23 15:31:50.800 | INFO     | KLIFF_LOSS:minimize:160 - Finish minimization using method: L-BFGS-B.
+2024-09-23 15:34:56.230 | INFO     | KLIFF_LOSS:minimize:158 - Start minimization using method: L-BFGS-B.
+2024-09-23 15:34:56.231 | INFO     | KLIFF_LOSS:_scipy_optimize:275 - Running in serial mode.
+2024-09-23 15:58:29.559 | INFO     | KLIFF_LOSS:minimize:160 - Finish minimization using method: L-BFGS-B.
+2024-09-23 15:58:30.923 | INFO     | KLIFF_LOSS:minimize:158 - Start minimization using method: L-BFGS-B.
+2024-09-23 15:58:30.924 | INFO     | KLIFF_LOSS:_scipy_optimize:275 - Running in serial mode.
+2024-09-24 10:19:47.838 | INFO     | KLIFF_LOSS:minimize:158 - Start minimization using method: L-BFGS-B.
+2024-09-24 10:19:47.841 | INFO     | KLIFF_LOSS:_scipy_optimize:275 - Running in serial mode.
+2024-09-24 10:26:48.898 | INFO     | KLIFF_LOSS:minimize:161 - Start minimization using method: L-BFGS-B.
+2024-09-24 10:26:48.900 | INFO     | KLIFF_LOSS:_scipy_optimize:278 - Running in serial mode.
+2024-09-24 10:31:45.283 | INFO     | KLIFF_LOSS:minimize:161 - Start minimization using method: L-BFGS-B.
+2024-09-24 10:31:45.285 | INFO     | KLIFF_LOSS:_scipy_optimize:278 - Running in serial mode.
+2024-09-24 10:49:04.422 | INFO     | KLIFF_LOSS:minimize:161 - Start minimization using method: L-BFGS-B.
+2024-09-24 10:49:04.425 | INFO     | KLIFF_LOSS:_scipy_optimize:278 - Running in serial mode.
+2024-09-24 10:49:54.914 | INFO     | KLIFF_LOSS:minimize:161 - Start minimization using method: L-BFGS-B.
+2024-09-24 10:49:54.916 | INFO     | KLIFF_LOSS:_scipy_optimize:278 - Running in serial mode.
+2024-09-24 10:51:11.894 | INFO     | KLIFF_LOSS:minimize:162 - Start minimization using method: L-BFGS-B.
+2024-09-24 10:51:11.896 | INFO     | KLIFF_LOSS:_scipy_optimize:279 - Running in serial mode.
+2024-09-24 10:52:21.114 | INFO     | KLIFF_LOSS:minimize:162 - Start minimization using method: L-BFGS-B.
+2024-09-24 10:52:21.116 | INFO     | KLIFF_LOSS:_scipy_optimize:279 - Running in serial mode.
+2024-09-24 10:53:40.070 | INFO     | KLIFF_LOSS:minimize:162 - Start minimization using method: L-BFGS-B.
+2024-09-24 10:53:40.072 | INFO     | KLIFF_LOSS:_scipy_optimize:279 - Running in serial mode.
+2024-09-24 11:31:42.146 | INFO     | KLIFF_LOSS:minimize:163 - Start minimization using method: L-BFGS-B.
+2024-09-24 11:31:42.148 | INFO     | KLIFF_LOSS:_scipy_optimize:280 - Running in serial mode.
+2024-09-24 11:33:05.261 | INFO     | KLIFF_LOSS:minimize:163 - Start minimization using method: L-BFGS-B.
+2024-09-24 11:33:05.262 | INFO     | KLIFF_LOSS:_scipy_optimize:280 - Running in serial mode.
+2024-09-24 11:35:29.536 | INFO     | KLIFF_LOSS:minimize:162 - Start minimization using method: L-BFGS-B.
+2024-09-24 11:35:29.538 | INFO     | KLIFF_LOSS:_scipy_optimize:279 - Running in serial mode.
+2024-09-24 13:43:21.369 | INFO     | KLIFF_LOSS:minimize:162 - Start minimization using method: L-BFGS-B.
+2024-09-24 13:43:21.370 | INFO     | KLIFF_LOSS:_scipy_optimize:279 - Running in serial mode.
