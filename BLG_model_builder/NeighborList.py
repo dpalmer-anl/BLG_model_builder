@@ -19,7 +19,7 @@ class NN_list:
         elif units == "angstroms":
             self.conversion = 1
         else:
-            print("only angstroms or bohr accetable units")
+            print("only angstroms or bohr acceptable units")
         self.displacements = None
         self.distances = None
         self.i = None
@@ -38,8 +38,13 @@ class NN_list:
         self.extended_di = []
         self.extended_dj = []
         extended_coords = []
-        for dx in [-1, 0, 1]:
-            for dy in [-1, 0, 1]:
+        num_lat_vec_1 = self.cutoff//(np.linalg.norm(cell[0])/2)+2
+        num_lat_vec_2 = self.cutoff//(np.linalg.norm(cell[1])/2)+2
+        lat_vec_iter_1 = np.arange(-num_lat_vec_1,num_lat_vec_1+1)
+        lat_vec_iter_2 = np.arange(-num_lat_vec_2,num_lat_vec_2+1)
+
+        for dx in lat_vec_iter_1:
+            for dy in lat_vec_iter_2:
                 extended_coords += list(positions[:, :] + cell[0, np.newaxis] * dx + cell[1, np.newaxis] * dy)
                 self.extended_di += [dx] * natoms
                 self.extended_dj += [dy] * natoms
@@ -80,7 +85,12 @@ class NN_list:
                 positions[self.j] - positions[self.i]
         else:
             neighbor_ind = self.j[np.where(self.i==index_i)]
-            displacements = self.atoms.get_distances(index_i,neighbor_ind,mic=True,vector=True)
+            #displacements = self.atoms.get_distances(index_i,neighbor_ind,mic=True,vector=True)
+            cell = self.atoms.get_cell()
+            positions = self.atoms.positions
+            displacements =   self.di[index_i*np.ones_like(neighbor_ind), np.newaxis] * cell[0] +\
+                self.dj[neighbor_ind, np.newaxis] * cell[1] +\
+                positions[neighbor_ind] - positions[index_i*np.ones_like(neighbor_ind)]
             
         return displacements
     

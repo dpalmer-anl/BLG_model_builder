@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 def get_monolayer_atoms(dx,dy,a=2.462):
     atoms=fg.shift.make_layer("A","rect",4,4,a,7.0,"B",12.01,1)
     curr_cell=atoms.get_cell()
-    atoms.set_array('mol-id',np.ones(len(atoms)))
+    atoms.set_array('mol-id',np.ones(len(atoms),dtype=np.int8))
     curr_cell[-1,-1]=14
     atoms.set_cell(curr_cell)
     return ase.Atoms(atoms) 
@@ -47,7 +47,7 @@ def get_lattice_vectors(a, c):
         [0, 0, c]
         ]
 
-def get_bilayer_atoms(d,disregistry, a=2.46, c=20, sc=5,zshift='CM'):
+def get_bilayer_atoms(d,disregistry, a=2.46, c=20, sc=1,zshift='CM'):
     '''All units should be in angstroms'''
     symbols = ["C","C","C","C"]
     atoms = ase.Atoms(

@@ -4,7 +4,6 @@ import os
 import json
 import subprocess
 from ase.calculators.calculator import Calculator, all_changes
-from lammps import PyLammps
 import scipy.linalg as spla
 from scipy.spatial.distance import cdist
 from scipy.sparse import csr_matrix
@@ -12,11 +11,14 @@ from BLG_model_builder.TB_Utils import *
 from BLG_model_builder.Lammps_Utils import *
 from BLG_model_builder.descriptors import *
 from BLG_model_builder import NeighborList 
-import TETB_GRAPHENE.TB_Utils
 import uuid
+import copy
+from lammps import PyLammps
+from lammps import lammps
 
 try:
     import cupy
+    import cupyx as cpx
     
     if cupy.cuda.is_available():
         np = cupy
@@ -31,10 +33,11 @@ except:
     print("to use GPU, Cupy must be installed")
 
 class TETB_model(Calculator):
-    def __init__(self,model_dict_input,output="TETB_calc",basis="pz",kmesh=(11,11,1)):
+    implemented_properties = ['energy','forces','potential_energy']
+    def __init__(self,model_dict_input,output=None,basis="pz",kmesh=None,update_eigvals=1,use_lammps=None,**kwargs):
         """ construct a TETB model with a given hopping (and optional overlap) functional form, descriptors calculated from atomic positions,
             and parameters. i.e. H_TB = F[Descriptors(ase.atoms object),Param.]. Example:"""
-        
+        Calculator.__init__(self, **kwargs)
         self.model_dict = {"interlayer":{"hopping form":None,"overlap form":None,
                                     "hopping parameters":None,
                                     "overlap parameters":None,
@@ -56,13 +59,16 @@ class TETB_model(Calculator):
                                     "descriptor kwargs":{},
                                     "use lammps":False,
                                     "potential":None,"potential parameters":None,"potential file writer":None}}
-
+        self.use_lammps = use_lammps
+        
         for m in model_dict_input:
-            if "potential" in model_dict_input[m] and type(model_dict_input[m]["potential"]) == str:
-                self.model_dict[m]["use lammps"]=True
-                self.use_lammps=True
-            else:
-                self.use_lammps=False
+            if self.use_lammps is None:
+                if "potential" in model_dict_input[m] and type(model_dict_input[m]["potential"]) == str:
+                    self.model_dict[m]["use lammps"]=True
+                    self.use_lammps=True
+                else:
+                    self.model_dict[m]["use lammps"]=False
+                    #self.use_lammps=False
 
             for mz in model_dict_input[m]:
                 self.model_dict[m][mz] = model_dict_input[m][mz]
@@ -70,14 +76,21 @@ class TETB_model(Calculator):
         self.natom_types = len(self.model_dict)
         if basis == "pz":
             self.norbs_per_atom = 1 
-        self.kpoints_reduced = k_uniform_mesh(kmesh)
-        self.nkp = np.shape(self.kpoints_reduced)[0]
+
+        self.kmesh = kmesh
+        self.nkp = 36
+        self.step_index = 0
+        self.update_eigvals = update_eigvals
+        self.wfn = None
         
-        self.output = output+"_"+str(uuid.uuid4())
-        
+        if output is None:
+            self.output = "TETB_calc_"+str(uuid.uuid4())
+        else:
+            self.output = output
         if not os.path.exists(self.output) and self.use_lammps:
             os.mkdir(self.output)
         if self.use_lammps:
+            
             cwd = os.getcwd()
             os.chdir(self.output)
             self.lammps_models = []
@@ -89,8 +102,20 @@ class TETB_model(Calculator):
                     self.lammps_models.append(self.model_dict[m]["potential"])
                     self.lammps_file_names.append(file_name)
                     self.model_dict[m]["potential file writer"](self.model_dict[m]["potential parameters"],file_name)
-                    
+
             os.chdir(cwd)
+            
+    def auto_select_kpoints(self,atoms):
+        #using empirical tests a converged (<0.01 meV/atom) k-point mesh for a 5x5 bilayer graphene supercell is (16,16,1)
+        cell = atoms.get_cell()
+        cell_length_1 = 2.46
+        cell_length_2 = 2.46
+        ncellsx = np.ceil(np.round(np.linalg.norm(cell[0,:])/cell_length_1))
+        ncellsy = np.ceil(np.round(np.linalg.norm(cell[1,:])/cell_length_2))
+        Kx = round(16 * 5/ncellsx)
+        Ky = round(16 * 5/ncellsy)
+        print("auto selected kmesh = ",(Kx,Ky,1))
+        return (Kx,Ky,1)
 
     def set_params(self,x):
         """x is an array of the dimension of total parameters """
@@ -158,6 +183,18 @@ class TETB_model(Calculator):
     def update_model_params(self,x):
         self.set_params(x)
 
+    def calculate(self, atoms, properties=None,system_changes=all_changes):
+        if properties is None:
+            properties = self.implemented_properties
+        Calculator.calculate(self, atoms, properties, system_changes)
+        total_energy,forces = self.get_total_energy(atoms)
+        self.results['forces'] = forces
+        self.results['potential_energy'] = total_energy
+        self.results['energy'] = total_energy
+    
+    def run(self,atoms):
+        self.calculate(atoms)
+
     def get_hoppings(self,atoms):
         hoppings = np.array([])
         overlap_elem = np.array([])
@@ -169,6 +206,8 @@ class TETB_model(Calculator):
         for dt in self.model_dict:
             calc_hopping_form = self.model_dict[dt]["hopping form"]
             calc_model_descriptors = self.model_dict[dt]["descriptors"]
+            if calc_hopping_form is None:
+                continue
 
             descriptors,i,j,tmp_di,tmp_dj = calc_model_descriptors(atoms,**self.model_dict[dt]["descriptor kwargs"])
             tmp_hops = calc_hopping_form(descriptors,self.model_dict[dt]["hopping parameters"],**self.model_dict[dt]["hopping kwargs"])
@@ -190,14 +229,117 @@ class TETB_model(Calculator):
         else:
             return hoppings/2,None,ind_i,ind_j,di,dj
     
-    def get_tb_energy(self,atoms,return_wf=False):
+    def SK_hopping_transform(self,atoms):
+        #need to check and see if this gives the correct answer
+        self_energy = -5.2887
+        ham = self_energy * np.eye(self.norbs)
+        hoppings,overlaps,hop_i,hop_j,hop_di,hop_dj =  self.get_hoppings(atoms)
+        if self.use_overlap:
+            overlap = np.eye(self.norbs)
+
+        amp = hoppings
+        np.add.at(ham,(hop_i,hop_j),amp)
+        np.add.at(ham,(hop_j,hop_i),np.conj(amp))
+        
+        if self.use_overlap:
+            o_amp = overlaps
+            np.add.at(overlap,(hop_i,hop_j),o_amp)
+            np.add.at(overlap,(hop_j,hop_i),np.conj(o_amp))
+        Binv = np.linalg.inv(overlap)
+        renorm_A  = Binv @ ham
+        eigvals,eigvecs = np.linalg.eigh(renorm_A)
+        #normalize eigenvectors s.t. eigvecs.conj().T @ B @ eigvecs = I
+        Q = eigvecs.conj().T @ B @ eigvecs
+        U = np.linalg.cholesky(np.linalg.inv(Q))
+        rotated_ham = ham @ U
+        return rotated_ham[hop_i,hop_j]
+
+    def get_tb_energy(self,atoms):
+        
         self.norbs = self.norbs_per_atom * len(atoms)
-        self_energy = 0 #-5.2887
+        self.tb_energy = 0
+        self.Forces = np.zeros((len(atoms),3))
+        self_energy = -5.2887
         positions = atoms.positions
         cell = atoms.get_cell()
+        mol_id = atoms.get_array("mol-id")
         if gpu_avail:
             positions = np.asarray(positions)
             cell = np.asarray(cell)
+            mol_id = np.asarray(mol_id)
+        tb_energy = 0
+        nocc = len(atoms)//2
+        hoppings,overlaps,hop_i,hop_j,hop_di,hop_dj =  self.get_hoppings(atoms)
+        
+        if self.kmesh is None:
+            self.kmesh = self.auto_select_kpoints(atoms)
+        self.kpoints_reduced = k_uniform_mesh(self.kmesh)
+        recip_cell = get_recip_cell(cell)
+        self.kpoints = self.kpoints_reduced @ recip_cell.T
+        self.nkp = np.shape(self.kpoints)[0]
+
+        fd_dist = 2*np.eye(len(atoms))
+        fd_dist[nocc:,nocc:] = 0
+        disp = hop_di[:, np.newaxis] * cell[0] +hop_dj[:, np.newaxis] * cell[1] +\
+                        positions[hop_j] - positions[hop_i]
+
+        for i in range(self.nkp):
+            ham = self_energy * np.eye(self.norbs,dtype=np.complex64)
+            if self.use_overlap:
+                overlap = np.eye(self.norbs,dtype=np.complex64)
+
+            phase = np.exp((1.0j)*np.dot(self.kpoints[i,:],disp.T))
+            amp = hoppings * phase
+            if gpu_avail:
+                ham[hop_i,hop_j] += amp
+                ham[hop_j,hop_i] += np.conj(amp)
+                if self.use_overlap:
+                    o_amp = overlaps * phase
+                    overlap[hop_i,hop_j] +=   o_amp
+                    overlap[hop_j,hop_i] +=  np.conj(o_amp)
+            else:
+                np.add.at(ham,(hop_i,hop_j),amp)
+                np.add.at(ham,(hop_j,hop_i),np.conj(amp))
+            
+                if self.use_overlap:
+                    o_amp = overlaps * phase
+                    np.add.at(overlap,(hop_i,hop_j),o_amp)
+                    np.add.at(overlap,(hop_j,hop_i),np.conj(o_amp))
+
+            if self.use_overlap:
+                if gpu_avail:
+                    self.eigvals, wf_k = generalized_eigen(ham,overlap)
+                else:
+                    self.eigvals,wf_k = spla.eigh(ham,b=overlap)
+            else:
+                self.eigvals,wf_k = np.linalg.eigh(ham)
+            
+            efermi = (self.eigvals[self.norbs//2]+self.eigvals[(self.norbs-1)//2])/2
+            self.tb_energy += 2 * np.sum(self.eigvals[:nocc])/self.nkp
+            del ham
+            del overlap
+            del amp
+            del o_amp
+            #self.Forces += get_hellman_feynman(atoms, disp,hop_i,hop_j,wf_k,self.kpoints[i,:],
+            #    self.model_dict["interlayer"]["hopping form"], self.model_dict["interlayer"]["hopping parameters"],overlap=self.model_dict[""])/self.nkp 
+            self.Forces += get_hellman_feynman(positions, mol_id, cell, self.eigvals,wf_k, {"interlayer":"popov","intralayer":"porezag"},self.kpoints[i,:],
+                                                self.model_dict["intralayer"]["hopping parameters"],self.model_dict["intralayer"]["overlap parameters"],
+                                                self.model_dict["interlayer"]["hopping parameters"],self.model_dict["interlayer"]["overlap parameters"])/self.nkp
+
+        self.step_index +=1
+        if gpu_avail:
+            return np.asnumpy(self.tb_energy), np.asnumpy(self.Forces)
+        else:
+            return self.tb_energy, self.Forces
+
+    def get_tb_energy_fd(self,atoms):
+        self.norbs = self.norbs_per_atom * len(atoms)
+        self.tb_energy = 0
+        self.Forces = np.zeros((len(atoms),3))
+        self_energy = -5.2887
+        dr = 1e-3
+        positions = atoms.positions
+        cell = atoms.get_cell()
         tb_energy = 0
         nocc = len(atoms)//2
         hoppings,overlaps,hop_i,hop_j,hop_di,hop_dj =  self.get_hoppings(atoms)
@@ -206,9 +348,10 @@ class TETB_model(Calculator):
 
         self.nkp = np.shape(self.kpoints)[0]
 
-        wf = np.zeros((self.norbs,self.norbs,self.nkp),dtype=complex)
+        self.wf = np.zeros((self.norbs,self.norbs,self.nkp),dtype=complex)
         disp = hop_di[:, np.newaxis] * cell[0] +hop_dj[:, np.newaxis] * cell[1] +\
                         positions[hop_j] - positions[hop_i]
+
         for i in range(self.nkp):
             ham = self_energy * np.eye(self.norbs,dtype=np.complex64)
             if self.use_overlap:
@@ -216,51 +359,69 @@ class TETB_model(Calculator):
 
             phase = np.exp((1.0j)*np.dot(self.kpoints[i,:],disp.T))
             amp = hoppings * phase
-            ham[hop_i,hop_j] += amp
-            ham[hop_j,hop_i] += np.conj(amp)
+            np.add.at(ham,(hop_i,hop_j),amp)
+            np.add.at(ham,(hop_j,hop_i),np.conj(amp))
+            
             if self.use_overlap:
                 o_amp = overlaps * phase
-                overlap[hop_i,hop_j] += o_amp
-                overlap[hop_j,hop_i] += np.conj(o_amp)
+                np.add.at(overlap,(hop_i,hop_j),o_amp)
+                np.add.at(overlap,(hop_j,hop_i),np.conj(o_amp))
 
-            if self.use_overlap:
-                if gpu_avail:
-                    eigvals, wf_k = generalized_eigen(ham,overlap)
+            if self.step_index % self.update_eigvals ==0:
+                #use perturbation theory to speed up relaxations/ md so you don't have to run as many diagonalizations
+                if self.use_overlap:
+                    if gpu_avail:
+                        self.eigvals, self.wf_k = generalized_eigen(ham,overlap)
+                    else:
+                        self.eigvals,self.wf_k = spla.eigh(ham,b=overlap)
                 else:
-                    eigvals,wf_k = spla.eigh(ham,b=overlap)
+                    self.eigvals,self.wf_k = np.linalg.eigh(ham)
             else:
-                eigvals,wf_k = np.linalg.eigh(ham)
-            tb_energy += 2 * np.sum(eigvals[:nocc])
-            wf[:,:,i] = wf_k
+                self.eigvals = np.diag(self.wf_k.T @ ham @ self.wf_k)
+            self.tb_energy += 2 * np.sum(self.eigvals[:nocc])/self.nkp
+            self.wf[:,:,i] = self.wf_k
             
-            Forces = np.zeros((len(atoms),3)) #get_hellman_feynman(atoms, eigvals,wf,self.kpoints[i,:])
+            for atom_ind in range(len(atoms)):
+                for dir_ind in range(3):
+                    atom_positions_pert = np.copy(positions)
+                    atom_positions_pert[atom_ind, dir_ind] += dr
+                    atoms_pert = copy.deepcopy(atoms)
+                    atoms_pert.positions = atom_positions_pert
+                    Energy_up,_ = self.get_tb_energy(atoms_pert)
+                    
+                    atom_positions_pert = np.copy(positions)
+                    atom_positions_pert[atom_ind, dir_ind] -= dr
+                    atoms_pert = copy.deepcopy(atoms)
+                    atoms_pert.positions = atom_positions_pert
+                    Energy_dwn,_ = self.get_tb_energy(atoms_pert)
 
-        if gpu_avail:
-            if return_wf:
-                return np.asnumpy(tb_energy/self.nkp), np.asnumpy(Forces), np.asnumpy(wf)
-            else:
-                return np.asnumpy(tb_energy/self.nkp), np.asnumpy(Forces)
-        else:
-            if return_wf:
-                return tb_energy/self.nkp, Forces, wf
-            else:
-                return tb_energy/self.nkp, Forces
+                    self.Forces[atom_ind, dir_ind] += -(Energy_up - Energy_dwn) / (2 * dr)
+
+            return self.tb_energy, self.Forces
 
     def get_residual_energy(self,atoms):
 
         residual_pe = 0
         for m in self.model_dict:
             if self.model_dict[m]["potential"] is not None:
-                if self.model_dict[m]["use lammps"]:
+                if self.use_lammps:
                     cwd = os.getcwd()
                     os.chdir(self.output)
                     forces,re,residual_energy = run_lammps(atoms,self.lammps_models,self.lammps_file_names)
                     os.chdir(cwd)
+                    residual_pe += re
+                    break
                 else:
-                    re = self.model_dict[m]["potential"](atoms,self.model_dict[m]["potential parameters"])
-                residual_pe += re
+                    ef = self.model_dict[m]["potential"](atoms,self.model_dict[m]["potential parameters"])
+                    if type(ef)==tuple:
+                        re = ef[0]
+                        forces = ef[1]
+                    else:
+                        re = ef
+                        forces = np.zeros((len(atoms),3))
+                    residual_pe += re
 
-        return residual_pe
+        return residual_pe, forces
 
     def relax_structure(self,atoms):
         if self.use_lammps:
@@ -275,7 +436,7 @@ class TETB_model(Calculator):
         return relax_atoms,forces
     
     def get_band_structure(self,atoms,kpoints):
-        self.set_neighbor_list(atoms)
+        #self.set_neighbor_list(atoms)
         self.norbs = self.norbs_per_atom * len(atoms)
         positions = atoms.positions
         cell = atoms.get_cell()
@@ -297,12 +458,29 @@ class TETB_model(Calculator):
             
             phase = np.exp((1.0j)*np.dot(self.kpoint_path[i,:],disp.T))
             amp = hoppings * phase
-            ham[hop_i,hop_j] += amp
-            ham[hop_j,hop_i] += np.conj(amp)
-            if self.use_overlap:
-                o_amp = overlaps * phase
-                overlap[hop_i,hop_j] += o_amp
-                overlap[hop_j,hop_i] += np.conj(o_amp)
+
+            if gpu_avail:
+                #cpx.scatter_add(ham,(hop_i,hop_j),amp)
+                #cpx.scatter_add(ham,(hop_j,hop_i),np.conj(amp))
+                
+                #if self.use_overlap:
+                #    o_amp = overlaps * phase
+                #    cpx.scatter_add(overlap,(hop_i,hop_j),o_amp)
+                #    cpx.scatter_add(overlap,(hop_j,hop_i),np.conj(o_amp))
+                ham[hop_i,hop_j] += amp
+                ham[hop_j,hop_i] += np.conj(amp)
+                if self.use_overlap:
+                    overlap[hop_i,hop_j] +=   o_amp
+                    overlap[hop_j,hop_i] +=  np.conj(o_amp)
+
+            else:
+                np.add.at(ham,(hop_i,hop_j),amp)
+                np.add.at(ham,(hop_j,hop_i),np.conj(amp))
+                
+                if self.use_overlap:
+                    o_amp = overlaps * phase
+                    np.add.at(overlap,(hop_i,hop_j),o_amp)
+                    np.add.at(overlap,(hop_j,hop_i),np.conj(o_amp))
 
             if self.use_overlap:
                 if gpu_avail:
@@ -317,9 +495,34 @@ class TETB_model(Calculator):
             return np.asnumpy(eigvals_k)
         else:
             return eigvals_k
+
+    def get_density_matrix(self,atoms):
+        tb_energy,tb_forces = self.get_tb_energy(atoms)
+        return self.density_matrix
+
+    def get_hamiltonian(self,atoms):
+        self.norbs = self.norbs_per_atom * len(atoms)
+        positions = atoms.positions
+        cell = atoms.get_cell()
+        hoppings,overlaps,hop_i,hop_j,hop_di,hop_dj =  self.get_hoppings(atoms)
+        recip_cell = get_recip_cell(cell)
+        self.kpoints = self.kpoints_reduced @ recip_cell.T
+
+        self.nkp = np.shape(self.kpoints)[0]
+        disp = hop_di[:, np.newaxis] * cell[0] +hop_dj[:, np.newaxis] * cell[1] +\
+                        positions[hop_j] - positions[hop_i]
+        ham_k = np.zeros((self.norbs,self.norbs,self.nkp),dtype=complex)
+
+        for i in range(self.nkp):
+            phase = np.exp((1.0j)*np.dot(self.kpoints[i,:],disp.T))
+            amp = hoppings * phase
+            np.add.at(ham_k,(hop_i,hop_j,i),amp)
+            np.add.at(ham_k,(hop_j,hop_i,i),np.conj(amp))
+        return ham_k
     
     def get_total_energy(self,atoms):
-        self.set_neighbor_list(atoms)
+        
+        #self.set_neighbor_list(atoms)
         if not atoms.has("mol-id"):
             pos = atoms.positions
             mean_z = np.mean(pos[:,2])
@@ -329,10 +532,30 @@ class TETB_model(Calculator):
             atoms.set_array("mol-id",mol_id)
 
         if self.model_dict["interlayer"]["hopping form"] is None and self.model_dict["intralayer"]["hopping form"] is None:
-            return self.get_residual_energy(atoms)
+            residual_energy, residual_forces = self.get_residual_energy(atoms)
+            return residual_energy, residual_forces
         else:
             tb_energy,tb_forces  = self.get_tb_energy(atoms)
-            return  self.get_residual_energy(atoms) + tb_energy 
+            residual_energy, residual_forces = self.get_residual_energy(atoms)
+            total_energy = residual_energy + tb_energy
+            forces = residual_forces + tb_forces
+            return  total_energy , forces
+    
+    def evaluate_residual_energy(self,atoms,parameters):
+        start_ind = 0
+        for i,m in enumerate(self.model_dict):
+            if self.model_dict[m]["potential"] is not None:
+                end_ind = start_ind + len(self.model_dict[m]["potential parameters"])
+                self.set_param_element(m,"potential parameters",parameters[start_ind:end_ind])
+                start_ind = end_ind
+
+        energy,_ = self.get_residual_energy(atoms)
+        return energy
+
+    def evaluate_total_energy(self,atoms,parameters):
+        self.set_params(parameters)
+        energy,_ = self.get_total_energy(atoms)
+        return energy
     
     def set_neighbor_list(self,atoms):
         atoms.neighbor_list = NeighborList.NN_list(atoms)
@@ -344,7 +567,7 @@ def generalized_eigen(A,B):
     eigvals,eigvecs = np.linalg.eigh(renorm_A)
     #normalize eigenvectors s.t. eigvecs.conj().T @ B @ eigvecs = I
     Q = eigvecs.conj().T @ B @ eigvecs
-    U = cp.linalg.cholesky(np.linalg.inv(Q))
+    U = np.linalg.cholesky(np.linalg.inv(Q))
     eigvecs = eigvecs @ U 
     eigvals = np.diag(eigvecs.conj().T @ A @ eigvecs).real
 
@@ -357,6 +580,8 @@ if __name__=="__main__":
     from pythtb import *
     from bilayer_letb.api import tb_model
     from BLG_model_builder.BLG_potentials import *
+    from BLG_model_builder.geom_tools import *
+    from BLG_model_builder.Lammps_Utils import *
 
     sep = 3.35
     a = 2.46
@@ -369,7 +594,7 @@ if __name__=="__main__":
     
     
     interlayer_params = np.array([16.34956726725497, 86.0913106836395, 66.90833163067475, 24.51352633628406,
-                                   -103.18388323245665, 1.8220964068356134, -2.537215908290726, 18.177497643244706, 2.762780721646056])
+                                -103.18388323245665, 1.8220964068356134, -2.537215908290726, 18.177497643244706, 2.762780721646056])
     intralayer_params = np.array([0.14687637217609084, 4.683462616941604, 12433.64356176609,\
             12466.479169306709, 19.121905577450008, 30.504342033258325,\
             4.636516235627607 , 1.3641304165817836, 1.3878198074813923])
@@ -395,33 +620,43 @@ if __name__=="__main__":
     intralayer_hopping_params = np.append(porezag_hopping_pp_sigma,porezag_hopping_pp_pi)
     intralayer_overlap_params = np.append(porezag_overlap_pp_sigma,porezag_overlap_pp_pi)
     #similar format to lammps pair_coeff
-    model_dict = {"interlayer":{"hopping form":interlayer_hopping_fxn,"overlap form":interlayer_overlap_fxn,
+    popov_model_dict = {"interlayer":{"hopping form":interlayer_hopping_fxn,"overlap form":interlayer_overlap_fxn,
                                 "hopping parameters":interlayer_hopping_params,"overlap parameters":interlayer_overlap_params,
                                 "descriptors":get_disp,"descriptor kwargs":{"type":"interlayer","cutoff":5.29177},"cutoff":5.29177,
                                 "potential":Kolmogorov_Crespi_insp,"potential parameters":interlayer_params},
     
-               "intralayer":{"hopping form":intralayer_hopping_fxn,"overlap form":intralayer_overlap_fxn,
+            "intralayer":{"hopping form":intralayer_hopping_fxn,"overlap form":intralayer_overlap_fxn,
                                 "hopping parameters":intralayer_hopping_params,"overlap parameters":intralayer_overlap_params,
                                 "descriptors":get_disp,"descriptor kwargs":{"type":"intralayer","cutoff":3.704239},"cutoff":3.704239,
                                 "potential":None,"potential parameters":None,"potential file writer":None}}
+    
+    mk_model_dict = model_dict = {"interlayer":{"hopping form":mk_hopping,"overlap form":None,
+                                "hopping parameters":np.array([-2.7, 2.2109794066373403, 0.48]),"overlap parameters":None,
+                                "descriptors":get_disp,"descriptor kwargs":{"type":"interlayer","cutoff":5.29},"cutoff":5.29,
+                                "potential":None,"potential parameters":None},
+    
+            "intralayer":{"hopping form":None,"overlap form":None,
+                                "hopping parameters":None,"overlap parameters":None,
+                                "descriptors":None,"descriptor kwargs":None,"cutoff":None,
+                                "potential":None,"potential parameters":None}}
 
     
     """model_dict = {"letb intralayer":{"hopping form":letb_intralayer,"overlap form":None,
                                     "hopping parameters":np.array([-2.7, 2.2109794066373403, 0.48]),"overlap parameters":None,
                                     "descriptors":letb_intralayer_descriptors},
-                  "letb interlayer":{"hopping form":letb_interlayer,"overlap form":None,
+                "letb interlayer":{"hopping form":letb_interlayer,"overlap form":None,
                                     "hopping parameters":np.array([-2.7, 2.2109794066373403, 0.48]),"overlap parameters":None,
                                     "descriptors":letb_interlayer_descriptors}}
     
     model_dict = {"porezag intralayer":{"hopping form":porezag_hopping,"overlap form":porezag_overlap,
                                     "hopping parameters":np.array([-2.7, 2.2109794066373403, 0.48]),"overlap parameters":None,
                                     "descriptors":"displacement"},
-                  "popov interlayer":{"hopping form":popov_hopping,"overlap form":popov_overlap,
+                "popov interlayer":{"hopping form":popov_hopping,"overlap form":popov_overlap,
                                     "hopping parameters":np.array([-2.7, 2.2109794066373403, 0.48]),"overlap parameters":None,
                                     "descriptors":"displacement"}}"""
     
-    calc = TETB_model(model_dict)
-    energy = calc.get_total_energy(atoms)
+    calc = TETB_model(mk_model_dict)
+    #energy = calc.get_total_energy(atoms)
 
     Gamma = [0,   0,   0]
     K = [1/3,2/3,0]
@@ -465,4 +700,4 @@ if __name__=="__main__":
     fig.savefig("theta_21_78_graphene.png", bbox_inches='tight')
     plt.clf()
 
-    
+        

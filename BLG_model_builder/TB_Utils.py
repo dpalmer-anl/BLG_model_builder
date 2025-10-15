@@ -1,13 +1,13 @@
 from scipy.spatial.distance import cdist
 import numpy as np
-from numba import njit
 import matplotlib.pyplot as plt
-from sympy import *
+from BLG_model_builder.descriptors import *
 try:
     import cupy
-
+    import cupyx as cpx
     if cupy.cuda.is_available():
         np = cupy
+        
         gpu_avail = True
     else:
         gpu_avail = False
@@ -105,13 +105,14 @@ def SK_bond_ints(r,params,aa = 0.529, b = 5.29177):
     bond_val  -= params[0]/2
     return bond_val
 
+
 ###############################################################################
 
 # POPOV
 
 ###############################################################################
 #@njit
-def popov_hopping(dR,params):
+def popov_hopping(disp,params):
     """pairwise Slater Koster Interlayer hopping parameters for pz orbitals of carbon as parameterized by Popov, Van Alsenoy in
      "Low-frequency phonons of few-layer graphene within a tight-binding model". function is fully vectorized
 
@@ -119,6 +120,8 @@ def popov_hopping(dR,params):
 
     :returns: (np.ndarray [N,]) Hamiltonian matrix elements [eV]
     """
+    bohr_per_ang = 1.8897259886
+    dR = disp * bohr_per_ang
     dRn = np.linalg.norm(dR, axis=1)
     dRn = dR / dRn[:,np.newaxis]
 
@@ -127,14 +130,14 @@ def popov_hopping(dR,params):
     m = dRn[:, 1]
     n = dRn[:, 2]
     r = np.linalg.norm(dR,axis=1)
-    aa = 1.0 *.529177   # [Bohr radii]
-    b = 10.0 *.529177  # [Bohr radii]
+    aa = 1.0    # [Bohr radii]
+    b = 10.0   # [Bohr radii]
     y = (2.0 * r - (b + aa)) / (b - aa)
 
     Cpp_sigma = params[:10]
     Cpp_pi = params[10:]
-    Vpp_sigma =  np.polynomial.chebyshev.chebval(y, Cpp_sigma) 
-    Vpp_pi =  np.polynomial.chebyshev.chebval(y, Cpp_pi) 
+    Vpp_sigma =  chebval(y, Cpp_sigma) #np.polynomial.chebyshev.chebval(y, Cpp_sigma) 
+    Vpp_pi =  chebval(y, Cpp_pi) 
 
     Vpp_sigma -= Cpp_sigma[0] / 2
     Vpp_pi -= Cpp_pi[0] / 2
@@ -142,7 +145,7 @@ def popov_hopping(dR,params):
     valmat = Ezz
     return valmat
 
-def popov_overlap(dR,params):
+def popov_overlap(disp,params):
     """pairwise Slater Koster Interlayer overlap parameters for pz orbitals of carbon as parameterized by Popov, Van Alsenoy in
      "Low-frequency phonons of few-layer graphene within a tight-binding model". function is fully vectorized
 
@@ -150,6 +153,8 @@ def popov_overlap(dR,params):
 
     :returns: (np.ndarray [N,]) Overlap matrix elements [eV]
     """
+    bohr_per_ang = 1.8897259886
+    dR = disp * bohr_per_ang
     dRn = np.linalg.norm(dR, axis=1)
     dRn = dR / dRn[:,np.newaxis]
 
@@ -159,14 +164,14 @@ def popov_overlap(dR,params):
     r = np.linalg.norm(dR,axis=1)
     
 
-    aa = 1.0 * .529177  # [Bohr radii]
-    b = 10.0 * .529177  # [Bohr radii]
+    aa = 1.0   # [Bohr radii]
+    b = 10.0   # [Bohr radii]
     y = (2.0 * r - (b + aa)) / (b - aa)
 
     Cpp_sigma = params[:10]
     Cpp_pi = params[10:]
-    Vpp_sigma =  np.polynomial.chebyshev.chebval(y, Cpp_sigma) 
-    Vpp_pi =  np.polynomial.chebyshev.chebval(y, Cpp_pi) 
+    Vpp_sigma =  chebval(y, Cpp_sigma) 
+    Vpp_pi =  chebval(y, Cpp_pi) 
 
     Vpp_sigma -= Cpp_sigma[0] / 2
     Vpp_pi -= Cpp_pi[0] / 2
@@ -181,7 +186,7 @@ def popov_overlap(dR,params):
 
 ####################################################################################################
 #@njit
-def porezag_hopping(dR,params):
+def porezag_hopping(disp,params):
     """pairwise Slater Koster hopping parameters for pz orbitals of carbon as parameterized by Porezag in
      "Construction of tight-binding-like potentials on the basis of density-functional theory: Application to carbon". function is fully vectorized
 
@@ -189,6 +194,8 @@ def porezag_hopping(dR,params):
 
     :returns: (np.ndarray [N,]) Hamiltonian matrix elements [eV]
     """
+    bohr_per_ang = 1.8897259886
+    dR = disp * bohr_per_ang
     dRn = np.linalg.norm(dR, axis=1)
     dRn = dR / dRn[:,np.newaxis]
 
@@ -197,14 +204,14 @@ def porezag_hopping(dR,params):
     n = dRn[:, 2]
     r = np.linalg.norm(dR,axis=1)
 
-    aa = 1.0 * .529177  # [Bohr radii]
-    b = 10.0 * .529177  # [Bohr radii]
+    aa = 1.0   # [Bohr radii]
+    b = 7   # [Bohr radii]
     y = (2.0 * r - (b + aa)) / (b - aa)
 
     Cpp_sigma = params[:10]
     Cpp_pi = params[10:]
-    Vpp_sigma =  np.polynomial.chebyshev.chebval(y, Cpp_sigma) 
-    Vpp_pi =  np.polynomial.chebyshev.chebval(y, Cpp_pi) 
+    Vpp_sigma =  chebval(y, Cpp_sigma) 
+    Vpp_pi =  chebval(y, Cpp_pi) 
 
     Vpp_sigma -= Cpp_sigma[0] / 2
     Vpp_pi -= Cpp_pi[0] / 2
@@ -212,7 +219,7 @@ def porezag_hopping(dR,params):
     valmat = Ezz
     return valmat
 
-def porezag_overlap(dR,params):
+def porezag_overlap(disp,params):
     """pairwise Slater Koster overlap parameters for pz orbitals of carbon as parameterized by Porezag in
      "Construction of tight-binding-like potentials on the basis of density-functional theory: Application to carbon". function is fully vectorized
 
@@ -220,6 +227,8 @@ def porezag_overlap(dR,params):
 
     :returns: (np.ndarray [N,]) Overlap matrix elements [eV]
     """
+    bohr_per_ang = 1.8897259886
+    dR = disp * bohr_per_ang
     dRn = np.linalg.norm(dR, axis=1)
     dRn = dR / dRn[:,np.newaxis]
 
@@ -228,14 +237,14 @@ def porezag_overlap(dR,params):
     n = dRn[:, 2]
     r = np.linalg.norm(dR,axis=1)
 
-    aa = 1.0 * .529177  # [Bohr radii]
-    b = 10.0 * .529177  # [Bohr radii]
+    aa = 1.0   # [Bohr radii]
+    b = 7   # [Bohr radii]
     y = (2.0 * r - (b + aa)) / (b - aa)
 
     Cpp_sigma = params[:10]
     Cpp_pi = params[10:]
-    Vpp_sigma =  np.polynomial.chebyshev.chebval(y, Cpp_sigma) 
-    Vpp_pi =  np.polynomial.chebyshev.chebval(y, Cpp_pi) 
+    Vpp_sigma =  chebval(y, Cpp_sigma) 
+    Vpp_pi =  chebval(y, Cpp_pi) 
 
     Vpp_sigma -= Cpp_sigma[0] / 2
     Vpp_pi -= Cpp_pi[0] / 2
@@ -258,42 +267,39 @@ def mk_hopping(descriptors,parameters):
     hoppings = V_p*(1 - n**2) + V_s * n**2
     return hoppings
 
-def mk_hopping_sympy(descriptors,parameters,grad=False):
-    #descriptors = displacements
-    #parameters = a,b,c
-    ang_per_bohr = 0.529177249 # Ang/bohr radius
-    [a,b,c] = parameters #units = [eV, 1/Angstroms, eV]
-    x_val = descriptors[:,0]
-    y_val = descriptors[:,1]
-    z_val = descriptors[:,2]
+def mk_overlap(descriptors,parameters):
+    r = np.linalg.norm(descriptors,axis=1)
+    [a,b,c] = parameters
+    a0 = 1.42
+    d0 = 3.35
+    n = (descriptors[:,2]) / r
+    V_p = a * np.exp(-b * (r - a0))
+    V_s = c * np.exp(-b * (r - d0))
+    hoppings = V_p*(1 - n**2) + V_s * n**2
+    return hoppings
 
-    a0 = 2.68 * ang_per_bohr
-    d0 = 6.33 * ang_per_bohr
+def poly_func(r,params):
+    t = np.array([np.power(r,-2*ind)*p for ind,p in enumerate(params) ])
+    return np.sum(t,axis=0)
 
-    x, y, z = symbols('x y z')
-    d = sqrt((x**2 + y **2 + z**2))
-    n_sq = z**2 / (x**2 + y **2 + z**2)
+"""def mk_hopping_grad(displacements,parameters):
+    r = np.linalg.norm(displacements,axis=1)
+    [a,b,c] = parameters
+    a0 = 1.42
+    d0 = 3.35
+    x = displacements[:,0]
+    y = displacements[:,1]
+    z = displacements[:,2]
+    grad_hoppings = np.zeros_like(displacements)
 
-    V_p = a * exp(-b * (d - a0))
-    V_s = c * exp(-b * (d - d0))
+    n = z / r
+    V_p = a * np.exp(-b * (r - a0))
+    V_s = c * np.exp(-b * (r - d0))
+    hoppings = V_p*(1 - n**2) + V_s * n**2
+
+    grad_hoppings[:,0] = -2*b*x * V_p * (1-n**2) + V_p *(2*x * n**2)
+                        + -2*b*x * V_s * (n**2) + V_s * (-2*x * n**2)"""
     
-
-    hop_expr = V_p*(1 - n_sq) + V_s * n_sq
-    hop_expr = lambdify([x,y,z], hop_expr, "numpy") 
-    hop_val = hop_expr(x_val, y_val, z_val)
-    if grad:
-        hop_diff_x_expr = diff(hop_expr,(x))
-        hop_diff_x_expr = lambdify([x,y,z], hop_diff_x_expr, "numpy") 
-        hop_diff_y_expr = diff(hop_expr,(y))
-        hop_diff_y_expr = lambdify([x,y,z], hop_diff_y_expr, "numpy")
-        hop_diff_z_expr = diff(hop_expr,(z))
-        hop_diff_z_expr = lambdify([x,y,z], hop_diff_z_expr, "numpy")
-
-        hop_diff_x = hop_diff_x_expr([x_val, y_val, z_val])
-        hop_diff_y = hop_diff_y_expr([x_val, y_val, z_val])
-        hop_diff_z = hop_diff_z_expr([x_val, y_val, z_val])
-        return hop_val, np.stack((hop_diff_x,hop_diff_y,hop_diff_z))
-    return hop_val
      
 
 #################################################################################################
@@ -303,10 +309,17 @@ def mk_hopping_sympy(descriptors,parameters,grad=False):
 ################################################################################################
 
 def letb_intralayer(descriptors,parameters,grad=False):
-    if type(parameters)==np.ndarray:
-        fit = {"t01":parameters[:2],"t02":parameters[2:6],"t03":parameters[6:]}
+
+    if type(parameters)==dict:
+        t01_params = parameters['t01']
+        t02_params = parameters['t02']
+        t03_params = parameters['t03']
+        
     else:
-        fit = parameters 
+        t01_params = parameters[:2]
+        t02_params = parameters[2:6]
+        t03_params = parameters[6:]
+
     distances = descriptors[3]
     #distances = np.sqrt(distances[0]**2 + distances[1]**2)
     min_distance = min(distances)
@@ -322,26 +335,40 @@ def letb_intralayer(descriptors,parameters,grad=False):
    
     # Anything else, we zero out
     t00 = (distances < 0.95 * min_distance) | (distances > 1.05 * 2 * min_distance)
-
-    t01 = np.dot(descriptors[0], fit['t01'][1:]) + fit['t01'][0]
-    t02 = np.dot(descriptors[1], fit['t02'][1:]) + fit['t02'][0]
-    t03 = np.dot(descriptors[2], fit['t03'][1:]) + fit['t03'][0]
+    dsc_array_1 = descriptors[0]["a"]
+    dsc_array_2 = np.vstack([np.asarray(descriptors[1][key]) for key in descriptors]).T
+    dsc_array_3 = np.vstack([np.asarray(descriptors[2][key]) for key in descriptors]).T
     hoppings = np.zeros(len(distances))
-    hoppings[t01_ix] = t01
-    hoppings[t02_ix] = t02
-    hoppings[t03_ix] = t03
+    hoppings[t01_ix] = letb_intralayer_t01(dsc_array_1,t01_params)
+    hoppings[t02_ix] = letb_intralayer_t02(dsc_array_2,t02_params)
+    hoppings[t03_ix] = letb_intralayer_t03(dsc_array_3,t03_params)
     hoppings[t00] = 0
     return hoppings
 
-def letb_interlayer(descriptors,parameters,grad=False):
-    
-    [a0, b0, c0, a3, b3, c3, a6, b6, c6, d6] = parameters
-    r, theta12, theta21 = descriptors['dxy'],descriptors['theta_12'],descriptors['theta_21']
-    r = r / 4.649 
+def letb_intralayer_t01(descriptors,t01_params):
+    t01 = descriptors * t01_params[1:] +t01_params[0]
+    return t01
 
-    v0 = a0 * np.exp(-b0 * r ** 2) * np.cos(c0 * r)
-    v3 = a3 * (r ** 2) * np.exp(-b3 * (r - c3) ** 2) 
-    v6 =  a6 * np.exp(-b6 * (r - c6)**2) * np.sin(d6 * r)
+def letb_intralayer_t02(descriptors,t02_params):
+    t02 = np.dot(descriptors, t02_params[1:]) + t02_params[0]
+    return t02
+
+def letb_intralayer_t03(descriptors,t03_params):
+    t03 = np.dot(descriptors, t03_params[1:]) + t03_params[0]
+    return t03
+
+def letb_interlayer(descriptors,parameters,grad=False):
+    [a0, b0, c0, a3, b3, c3, a6, b6, c6, d6] = parameters
+    if type(descriptors)==dict:
+        r, theta12, theta21 = descriptors['d'],descriptors['theta_12'],descriptors['theta_21']
+    else:
+        r = descriptors[:,0]
+        theta12 = descriptors[:,1]
+        theta21 = descriptors[:,2]
+    r = r / 4.649 
+    v0 = a0 * np.exp(-b0 * np.power(r, 2)) * np.cos(c0 * r)
+    v3 = a3 * (np.power(r, 2)) * np.exp(-b3 * np.power((r - c3) , 2)) 
+    v6 =  a6 * np.exp(-b6 * np.power((r - c6),2)) * np.sin(d6 * r)
     hoppings =  v0 
     hoppings += v3 * (np.cos(3 * theta12) + np.cos(3 * theta21))
     hoppings += v6 * (np.cos(6 * theta12) + np.cos(6 * theta21))
@@ -353,7 +380,158 @@ def letb_interlayer(descriptors,parameters,grad=False):
 # Hellman-Feynman forces
 
 ############################################################################################
-def get_hellman_feynman(atoms, eigvals,eigvec, kpoint):
+models_functions_interlayer = {'letb':letb_interlayer,
+                                    'mk':mk_hopping,
+                                    'popov':popov_hopping}
+overlap_models_functions_interlayer ={'letb':None,
+                                    'mk':None,
+                                    'popov':popov_overlap}
+models_cutoff_interlayer={'letb':10,
+                        'mk':10,
+                        'popov':5.29,
+                        "nn":3}
+models_self_energy = {'letb':0,
+                    'mk':0,
+                    'popov':-5.2887,
+                    "nn":0}
+models_functions_intralayer = {'letb':letb_intralayer,
+                                'mk':mk_hopping,
+                                'porezag':porezag_hopping}
+models_cutoff_intralayer={'letb':10,
+                        'mk':10,
+                        'porezag':3.7}
+
+overlap_models_functions_intralayer ={'letb':None,
+                                    'mk':None,
+                                    'porezag':porezag_overlap}
+
+def get_unique_set(array):
+    unique_set = np.array([])
+    for elem in array:
+        if elem in unique_set:
+            continue
+        else:
+            unique_set = np.append(unique_set,elem)
+    return np.array(unique_set)
+
+def get_hellman_feynman(atomic_basis, layer_types, lattice_vectors, eigvals,eigvec, model_type,kpoint,
+                        intralayer_hopping_params,intralayer_overlap_params, interlayer_hopping_params,interlayer_overlap_params):
+    """Calculate Hellman-feynman forces for a given system. Uses finite differences to calculate matrix elements derivatives 
+    
+    :params atomic_basis: (np.ndarray [Natoms,3]) positions of atoms in angstroms
+
+    :params layer_types: (np.ndarray [Natoms,]) atom types expressed as integers
+
+    :params lattice_vectors: (np.ndarray [3,3]) cell of system where cell[i, j] is the jth Cartesian coordinate of the ith cell vector
+
+    :params eigvals: (np.ndarray [natoms,]) band structure eigenvalues of system
+
+    :params eigvec: (np.ndarray [natoms,natoms]) eigenvectors of system
+
+    :params model_type: (str) specify which tight binding model to use. Options: [popov, mk]
+
+    :params kpoint: (np.ndarray [3,]) kpoint to build hamiltonian and overlap with
+
+    :returns: (np.ndarray [natoms,3]) tight binding forces on each atom"""
+    #get hellman_feynman forces at single kpoint. 
+    #dE/dR_i =  - Tr_i(rho_e *dS/dR_i + rho * dH/dR_i)
+    #construct density matrix
+    natoms = len(layer_types)
+    conversion = 1.0 #/.529177 # ASE is always in angstrom, while our package wants bohr
+    lattice_vectors = np.array(lattice_vectors)*conversion
+    atomic_basis = atomic_basis*conversion
+    nocc = natoms//2
+    fd_dist = 2*np.eye(natoms)
+    fd_dist[nocc:,nocc:] = 0
+    occ_eigvals = 2*np.diag(eigvals)
+    occ_eigvals[nocc:,nocc:] = 0
+    density_matrix =  eigvec @ fd_dist  @ np.conj(eigvec).T
+    #charge_density = np.diag(density_matrix)
+    energy_density_matrix = eigvec @ occ_eigvals @ np.conj(eigvec).T
+    del eigvec
+    tot_eng = 2 * np.sum(eigvals[:nocc])
+
+    Forces = np.zeros((natoms,3))
+    layer_type_set = get_unique_set(layer_types)
+
+    diFull = []
+    djFull = []
+    extended_coords = []
+    for dx in [-1, 0, 1]:
+        for dy in [-1, 0, 1]:
+            extended_coords += list(atomic_basis[:, :] + lattice_vectors[0, np.newaxis] * dx + lattice_vectors[1, np.newaxis] * dy)
+            diFull += [dx] * natoms
+            djFull += [dy] * natoms
+    distances = cdist(atomic_basis, extended_coords)
+
+    for i_int,i_type in enumerate(layer_type_set):
+        for j_int,j_type in enumerate(layer_type_set):
+
+            if i_type==j_type:
+                cutoff = models_cutoff_intralayer[model_type["intralayer"]] * conversion
+                hopping_model = models_functions_intralayer[model_type["intralayer"]] #porezag_hopping
+                hopping_params = intralayer_hopping_params
+                overlap_model = overlap_models_functions_intralayer[model_type["intralayer"]] #porezag_overlap
+                overlap_params = intralayer_overlap_params
+            else:
+                hopping_model = models_functions_interlayer[model_type["interlayer"]] #popov_hopping
+                hopping_params = interlayer_hopping_params
+                overlap_model = overlap_models_functions_interlayer[model_type["interlayer"]] #popov_overlap
+                overlap_params = interlayer_overlap_params
+                cutoff = models_cutoff_interlayer[model_type["interlayer"]] * conversion
+
+            indi, indj = np.where((distances > 0.1) & (distances < cutoff))
+            di = np.array(diFull)[indj]
+            dj = np.array(djFull)[indj]
+            i  = np.array(indi)
+            j  = np.array(indj % natoms)
+            valid_indices = layer_types[i] == i_type
+            valid_indices &= layer_types[j] == j_type
+            disp =  di[valid_indices, np.newaxis] * lattice_vectors[0] +\
+                dj[valid_indices, np.newaxis] * lattice_vectors[1] +\
+                atomic_basis[j[valid_indices]] - atomic_basis[i[valid_indices]]
+            phases = np.exp((1.0j)*np.dot(kpoint,disp.T))
+
+            dist = np.linalg.norm(disp,axis=1)
+            #coulomb_energy = np.sum(charge_density[i[valid_indices]] * charge_density[j[valid_indices]] / dist)
+            #coulomb_forces = charge_density[i[valid_indices]] * charge_density[j[valid_indices]] / dist**2 * (disp/dist)
+            #check gradients of hoppings via finite difference
+            grad_hop = np.zeros_like(disp)
+            grad_overlap = np.zeros_like(disp)
+
+            delta = 1e-5
+            for dir_ind in range(3):
+                dr = np.zeros(3)
+                dr[dir_ind] +=  delta
+                hop_up = hopping_model(disp+dr[np.newaxis,:],hopping_params)
+                hop_dwn = hopping_model(disp-dr[np.newaxis,:],hopping_params)
+                grad_hop[:,dir_ind] = (hop_up - hop_dwn)/2/delta
+
+                overlap_up = overlap_model(disp+dr[np.newaxis,:],overlap_params)
+                overlap_dwn = overlap_model(disp-dr[np.newaxis,:],overlap_params)
+
+                grad_overlap[:,dir_ind] = (overlap_up - overlap_dwn)/2/delta
+
+            rho =  density_matrix[i[valid_indices],j[valid_indices]][:,np.newaxis] 
+            energy_rho = energy_density_matrix[i[valid_indices],j[valid_indices]][:,np.newaxis]
+            gradH = grad_hop * phases[:,np.newaxis] * rho
+            gradH += np.conj(gradH)
+            Pulay =  grad_overlap * phases[:,np.newaxis] * energy_rho
+            Pulay += np.conj(Pulay)
+
+            for atom_ind in range(natoms):
+                use_ind = np.where(i[valid_indices]==atom_ind)[0]
+                ave_gradH = gradH[use_ind,:]
+                ave_gradS = Pulay[use_ind,:] 
+                if ave_gradH.ndim!=2:
+                    Forces[atom_ind,:] -= -ave_gradH.real 
+                    Forces[atom_ind,:] -=   ave_gradS.real
+                else:
+                    Forces[atom_ind,:] -= -np.sum(ave_gradH,axis=0).real 
+                    Forces[atom_ind,:] -=   np.sum(ave_gradS,axis=0).real
+    return Forces * conversion
+
+def get_hellman_feynman_depr(atoms, disp,hop_i,hop_j,eigvec, kpoint,hopping,hopping_params,eigvals=None,overlap = None,overlap_params=None):
     """Calculate Hellman-feynman forces for a given system. Uses finite differences to calculate matrix elements derivatives 
     
     :params atomic_basis: (np.ndarray [Natoms,3]) positions of atoms in angstroms
@@ -378,50 +556,51 @@ def get_hellman_feynman(atoms, eigvals,eigvec, kpoint):
     nocc = natoms//2
     fd_dist = 2*np.eye(natoms)
     fd_dist[nocc:,nocc:] = 0
-    occ_eigvals = 2*np.diag(eigvals)
-    occ_eigvals[nocc:,nocc:] = 0
     density_matrix =  eigvec @ fd_dist  @ np.conj(eigvec).T
-    energy_density_matrix = eigvec @ occ_eigvals @ np.conj(eigvec).T
+    if overlap is not None:
+        occ_eigvals = 2*np.diag(eigvals)
+        occ_eigvals[nocc:,nocc:] = 0
+        energy_density_matrix = eigvec @ occ_eigvals @ np.conj(eigvec).T
 
     Forces = np.zeros((natoms,3))
-
-    disp = get_disp(atoms)
+    grad_hop = np.zeros_like(disp)
+    if overlap is not None:
+        grad_overlap = np.zeros_like(disp)
     phases = np.exp((1.0j)*np.dot(kpoint,disp.T))
-
-    #check gradients of hoppings via finite difference
-    grad_hop,hop_i,hop_j,hop_di,hop_dj = get_grad_hoppings(atoms)
-    grad_overlap = get_grad_hoppings(atoms)
-
-    delta = 1e-5
+    #grad_hop = get_grad_hop(disp,hopping_params)
+    delta = 1e-4
     for dir_ind in range(3):
         dr = np.zeros(3)
         dr[dir_ind] +=  delta
-        hop_up = hopping_model(disp+dr[np.newaxis,:])
-        hop_dwn = hopping_model(disp-dr[np.newaxis,:])
+        
+        hop_up = hopping(disp+dr[np.newaxis,:],hopping_params)
+        hop_dwn = hopping(disp-dr[np.newaxis,:],hopping_params)
         grad_hop[:,dir_ind] = (hop_up - hop_dwn)/2/delta
-
-        overlap_up = overlap_model(disp+dr[np.newaxis,:])
-        overlap_dwn = overlap_model(disp-dr[np.newaxis,:])
-
-        grad_overlap[:,dir_ind] = (overlap_up - overlap_dwn)/2/delta
+        if overlap is not None:
+            overlap_up = overlap_model(disp+dr[np.newaxis,:],overlap_params)
+            overlap_dwn = overlap_model(disp-dr[np.newaxis,:],overlap_params)
+            grad_overlap[:,dir_ind] = (overlap_up - overlap_dwn)/2/delta
 
     rho =  density_matrix[hop_i,hop_j][:,np.newaxis] 
-    energy_rho = energy_density_matrix[hop_i,hop_j][:,np.newaxis]
+    if overlap is not None:
+        energy_rho = energy_density_matrix[hop_i,hop_j][:,np.newaxis]
     gradH = grad_hop * phases[:,np.newaxis] * rho
-    gradH += np.conj(gradH)
-    Pulay =  grad_overlap * phases[:,np.newaxis] * energy_rho
-    Pulay += np.conj(Pulay)
+    if overlap is not None:
+        Pulay =  grad_overlap * phases[:,np.newaxis] * energy_rho
 
-    for atom_ind in range(natoms):
-        use_ind = np.squeeze(np.where(hop_i==atom_ind))
-        ave_gradH = gradH[use_ind,:]
-        ave_gradS = Pulay[use_ind,:] 
-        if ave_gradH.ndim!=2:
-            Forces[atom_ind,:] -= -ave_gradH.real 
-            Forces[atom_ind,:] -=   ave_gradS.real
-        else:
-            Forces[atom_ind,:] -= -np.sum(ave_gradH,axis=0).real 
-            Forces[atom_ind,:] -=   np.sum(ave_gradS,axis=0).real
+    if gpu_avail:
+        cpx.scatter_add(Forces,hop_i,gradH.real)
+        cpx.scatter_add(Forces,hop_i,np.conj(gradH).real)
+        if overlap is not None:
+            cpx.scatter_add(Forces,hop_i,Pulay.real)
+            cpx.scatter_add(Forces,hop_i,np.conj(Pulay).real)
+    else:
+        np.add.at(Forces,hop_i,gradH.real)
+        np.add.at(Forces,hop_i,np.conj(gradH).real)
+        if overlap is not None:
+            np.add.at(Forces,hop_i,Pulay.real)
+            np.add.at(Forces,hop_i,np.conj(Pulay).real)
+
     return Forces
 
 ############################################################################################
@@ -561,3 +740,4 @@ def k_path(sym_pts,nk,report=False):
         dk_[i] = np.linalg.norm(kvec[i,:]-kvec[i-1,:]) + dk_[i-1]
 
     return (kvec,dk_, knode)
+

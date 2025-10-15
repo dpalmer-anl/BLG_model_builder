@@ -20,7 +20,8 @@ def nnmat(lattice_vectors, atomic_basis):
 
     Returns: nnmat [natom x 3 x 3]
     """
-    
+    lattice_vectors = np.asarray(lattice_vectors)
+    atomic_basis = np.asarray(atomic_basis)
     nnmat = np.zeros((len(atomic_basis), 3, 3))
 
     # Extend atom list
@@ -49,6 +50,8 @@ def ix_to_dist(lattice_vectors, atomic_basis, di, dj, ai, aj):
     dxy - Distance in Bohr, projected in the x/y plane
     dz  - Distance in Bohr, projected onto the z axis
     """
+    lattice_vectors = np.asarray(lattice_vectors)
+    atomic_basis = np.asarray(atomic_basis)
 
     displacement_vector = di[:, np.newaxis] * lattice_vectors[0] +\
                           dj[:, np.newaxis] * lattice_vectors[1] +\
@@ -74,18 +77,23 @@ def get_disp(atoms,units = "angstroms",cutoff=6,type="all"):
     di = []
     dj = []
     extended_coords = []
-    for dx in [-1, 0, 1]:
-        for dy in [-1, 0, 1]:
+    num_lat_vec_1 = cutoff//(np.linalg.norm(cell[0])/2)+1
+    num_lat_vec_2 = cutoff//(np.linalg.norm(cell[1])/2)+1
+    lat_vec_iter_1 = [-1,0,1] #np.arange(-num_lat_vec_1,num_lat_vec_1+1)
+    lat_vec_iter_2 = [-1,0,1] #np.arange(-num_lat_vec_2,num_lat_vec_2+1)
+
+    for dx in lat_vec_iter_1:
+        for dy in lat_vec_iter_2:
             extended_coords += list(positions[:, :] + cell[0, np.newaxis] * dx + cell[1, np.newaxis] * dy)
             di += [dx] * natoms
             dj += [dy] * natoms
     distances = cdist(positions, extended_coords)
 
     i, j = np.where((distances > 0.529)  & (distances < cutoff))
-    di = np.array(di)[j]
-    dj = np.array(dj)[j]
-    i  = np.array(i)
-    j  = np.array(j % natoms)
+    di = np.asarray(di)[j]
+    dj = np.asarray(dj)[j]
+    i  = np.asarray(i)
+    j  = np.asarray(j % natoms)
     if type=="all":
         disp =  di[:, np.newaxis] * cell[0] +\
                 dj[:, np.newaxis] * cell[1] +\
@@ -121,8 +129,9 @@ def triangle_height(a, base):
     """
     Give area of a triangle given two displacement vectors for 2 sides
     """
+     
     area = np.linalg.det(
-            np.array([a, base, [1, 1, 1]])
+            np.asarray([a, base, np.asarray([1, 1, 1])])
     )
     area = np.abs(area)/2
     height = 2 * area / np.linalg.norm(base)
@@ -130,13 +139,17 @@ def triangle_height(a, base):
 #@njit
 def t01_descriptors(lattice_vectors, atomic_basis, di, dj, ai, aj):
     # Compute NN distances
+    lattice_vectors = np.asarray(lattice_vectors)
+    atomic_basis = np.asarray(atomic_basis)
     r = di[:, np.newaxis] * lattice_vectors[0] + dj[:, np.newaxis] * lattice_vectors[1] +\
         atomic_basis[aj] - atomic_basis[ai] # Relative coordinates
     a = np.linalg.norm(r, axis = 1)
-    return pd.DataFrame({'a': a})
+    return {'a': a}
 #@njit
 def t02_descriptors(lattice_vectors,atomic_basis,di,dj, ai, aj):
     # Compute NNN distances
+    lattice_vectors = np.asarray(lattice_vectors)
+    atomic_basis = np.asarray(atomic_basis)
     r = di[:, np.newaxis] * lattice_vectors[0] + dj[:, np.newaxis] * lattice_vectors[1] +\
         atomic_basis[aj] - atomic_basis[ai]
 
@@ -152,13 +165,15 @@ def t02_descriptors(lattice_vectors,atomic_basis,di,dj, ai, aj):
         ind = np.argsort(nndist)
         h1.append(triangle_height(nn[ind[0]], r[i]))
         h2.append(triangle_height(nn[ind[1]], r[i]))
-    return pd.DataFrame({'h1': h1, 'h2': h2, 'b': b})
+    return {'h1': h1, 'h2': h2, 'b': b}
 #@njit
 def t03_descriptors(lattice_vectors,atomic_basis,di, dj, ai, aj):
     """
     Compute t03 descriptors
     """
     # Compute NNNN distances
+    lattice_vectors = np.asarray(lattice_vectors)
+    atomic_basis = np.asarray(atomic_basis)
     r = di[:, np.newaxis] * lattice_vectors[0] + dj[:, np.newaxis] * lattice_vectors[1] +\
         atomic_basis[aj] - atomic_basis[ai] # Relative coordinates
     c = np.linalg.norm(r, axis = 1)
@@ -186,7 +201,7 @@ def t03_descriptors(lattice_vectors,atomic_basis,di, dj, ai, aj):
 
         l.append((a + b + d + e)/4)
         h.append((h1 + h2 + h3 + h4)/4)
-    return pd.DataFrame({'c': c, 'h': h, 'l': l})
+    return {'c': c, 'h': h, 'l': l}
 #@njit
 def letb_intralayer_descriptors(atoms,cutoff=6) : #lattice_vectors, atomic_basis, di, dj, ai, aj):
     """ 
@@ -197,7 +212,7 @@ def letb_intralayer_descriptors(atoms,cutoff=6) : #lattice_vectors, atomic_basis
         ai, aj - basis elements for pair i, j
     """
     # Partition 
-    ang_per_bohr = 0.529
+    ang_per_bohr = 1 #0.529
     disp,i,j,di,dj = get_disp(atoms,type="intralayer",cutoff=cutoff)
     distances = np.linalg.norm(disp,axis=1)/ang_per_bohr
     min_distance = min(distances)
@@ -220,7 +235,7 @@ def letb_intralayer_descriptors(atoms,cutoff=6) : #lattice_vectors, atomic_basis
     t03 = t03_descriptors(atoms.get_cell()/ang_per_bohr, atoms.positions/ang_per_bohr, di[t03_ix], dj[t03_ix], i[t03_ix], j[t03_ix])
     return (t01, t02, t03,distances), i,j,di,dj
 
-def letb_intralayer_descriptors_array(lattice_vectors, disp,atomic_basis, di, dj, i, j) :
+def letb_intralayer_descriptors_array(lattice_vectors, disp,atomic_basis, di, dj, i, j,nn_val=None) :
     """ 
     Build bi-layer descriptors given geometric quantities
         lattice_vectors - lattice_vectors of configuration
@@ -229,9 +244,9 @@ def letb_intralayer_descriptors_array(lattice_vectors, disp,atomic_basis, di, dj
         ai, aj - basis elements for pair i, j
     """
     # Partition 
-    ang_per_bohr = 0.529
-    lattice_vectors = lattice_vectors/ang_per_bohr
-    atomic_basis = atomic_basis/ang_per_bohr
+    ang_per_bohr = 1 #0.529
+    lattice_vectors = np.asarray(lattice_vectors)
+    atomic_basis = np.asarray(atomic_basis)
     disp/= ang_per_bohr
     distances = np.linalg.norm(disp,axis=1)
     min_distance = min(distances)
@@ -249,10 +264,19 @@ def letb_intralayer_descriptors_array(lattice_vectors, disp,atomic_basis, di, dj
     t00 = (distances < 0.95 * min_distance) | (distances > 1.05 * 2 * min_distance)
 
     # Compute descriptors
-    t01 = t01_descriptors(lattice_vectors, atomic_basis, di[t01_ix], dj[t01_ix], i[t01_ix], j[t01_ix])
-    t02 = t02_descriptors(lattice_vectors, atomic_basis, di[t02_ix], dj[t02_ix], i[t02_ix], j[t02_ix])
-    t03 = t03_descriptors(lattice_vectors, atomic_basis, di[t03_ix], dj[t03_ix], i[t03_ix], j[t03_ix])
-    return [t01, t02, t03,distances]
+    t01 = t01_descriptors(lattice_vectors/ang_per_bohr, atomic_basis/ang_per_bohr, di[t01_ix], dj[t01_ix], i[t01_ix], j[t01_ix])
+    t02 = t02_descriptors(lattice_vectors/ang_per_bohr, atomic_basis/ang_per_bohr, di[t02_ix], dj[t02_ix], i[t02_ix], j[t02_ix])
+    t03 = t03_descriptors(lattice_vectors/ang_per_bohr, atomic_basis/ang_per_bohr, di[t03_ix], dj[t03_ix], i[t03_ix], j[t03_ix])
+    if nn_val ==1:
+        return t01["a"], t01_ix
+    elif nn_val==2:
+        return np.vstack([np.asarray(t02[key]) for key in t02]).T, t02_ix
+    elif nn_val ==3:
+        return np.vstack([np.asarray(t03[key]) for key in t03]).T, t03_ix
+    else:
+        return [t01, t02, t03,distances], np.concatenate((t01_ix,t02_ix,t03_ix))
+
+
 
 def ix_to_orientation(lattice_vectors, atomic_basis, di, dj, ai, aj):
     """
@@ -282,7 +306,7 @@ def ix_to_orientation(lattice_vectors, atomic_basis, di, dj, ai, aj):
 
         theta_12.append(np.pi - theta_jnn[0])
         theta_21.append(theta_inn[0])
-    return theta_12, theta_21
+    return np.asarray(theta_12), np.asarray(theta_21)
 #@njit
 def letb_interlayer_descriptors(atoms,cutoff=6):
     """
@@ -292,9 +316,11 @@ def letb_interlayer_descriptors(atoms,cutoff=6):
         di, dj - lattice_vector displacements between pair i, j
         ai, aj - basis elements for pair i, j
     """
-    ang_per_bohr = 0.529
+    ang_per_bohr = 1 #0.529
     lattice_vectors = atoms.get_cell()/ang_per_bohr
+    lattice_vectors = np.asarray(lattice_vectors)
     atomic_basis = atoms.positions/ang_per_bohr
+    atomic_basis = np.asarray(atomic_basis)
     disp,i,j,di,dj = get_disp(atoms)
     disp/= ang_per_bohr
 
@@ -309,27 +335,26 @@ def letb_interlayer_descriptors(atoms,cutoff=6):
         'theta_12': [], # Orientation of upper layer NN environment
         'theta_21': [], # Orientation of lower layer NN environment
     }
-    output['dxy'] = list(dist_xy)
-    output['dz'] = list(dist_z)
-    output['d'] = list(dist)
+    
 
     # Many-body terms
     theta_12, theta_21 = ix_to_orientation(lattice_vectors, atomic_basis, di, dj, i, j)
 
-    output["theta_12"] += list(theta_12)
-    output['theta_21'] += list(theta_21)
-   
     # Return pandas DataFrame
-    df = pd.DataFrame(output)
+    #df = pd.DataFrame(output)
     atom_types = np.asarray(atoms.get_array("mol-id"))
     inter_valid_indices = atom_types[i] != atom_types[j]
     inter_indi = i[inter_valid_indices]
     inter_indj = j[inter_valid_indices]
     inter_di = di[inter_valid_indices]
     inter_dj = dj[inter_valid_indices]
-    df = df[inter_valid_indices]
+    #df = df[inter_valid_indices]
+    output['dxy'] = dist_xy[inter_valid_indices]
+    output['dz'] = dist_z[inter_valid_indices]
+    output["theta_12"] = theta_12[inter_valid_indices]
+    output['theta_21'] = theta_21[inter_valid_indices]
     
-    return df,inter_indi,inter_indj,inter_di,inter_dj
+    return output,inter_indi,inter_indj,inter_di,inter_dj
 
 def letb_interlayer_descriptors_array(lattice_vectors, disp,atomic_basis, di, dj, i, j):
     output = {
@@ -339,22 +364,23 @@ def letb_interlayer_descriptors_array(lattice_vectors, disp,atomic_basis, di, dj
         'theta_12': [], # Orientation of upper layer NN environment
         'theta_21': [], # Orientation of lower layer NN environment
     }
-
+    output = np.zeros((len(i),3))
     # 2-body terms
-    ang_per_bohr = 0.529
+    ang_per_bohr = 1 #0.529
     disp/= ang_per_bohr
     dist_xy = np.linalg.norm(disp[:,:2],axis=1)
     dist_z = np.abs(disp[:,2])
     dist = np.linalg.norm(disp,axis=1)
-    output['dxy'] = list(dist_xy)
-    output['dz'] = list(dist_z)
-    output['d'] = list(dist)
+    #output[:,0] = np.array(dist_xy)
+    #output[:,1] = np.array(dist_z)
+    output[:,0] = np.array(dist)
 
     # Many-body terms
     theta_12, theta_21 = ix_to_orientation(lattice_vectors/ang_per_bohr, atomic_basis/ang_per_bohr, di, dj, i, j)
-    output["theta_12"] += list(theta_12)
-    output['theta_21'] += list(theta_21)
+    output[:,1] = np.array(theta_12)
+    output[:,2] = np.array(theta_21)
    
     # Return pandas DataFrame
-    df = pd.DataFrame(output)
-    return df
+    #df = pd.DataFrame(output)
+    # key = d,theta_12, theta_21
+    return output
