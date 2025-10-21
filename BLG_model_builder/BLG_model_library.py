@@ -376,7 +376,7 @@ def create_Dataset(interlayer_df,intralayer_db, supercells):
 
     return interlayer_atom_list,interlayer_energies,interlayer_uncertainties,intralayer_atom_list,intralayer_energies
 
-def get_training_data(model_name,supercells=5,nn_val=None):
+def get_training_data(model_name,supercells=20,nn_val=None):
     xdata = {} 
     ydata = {} 
     ydata_noise = {}

@@ -13,15 +13,12 @@ def get_intel_gpu_device():
     """Get Intel GPU device if available, otherwise CPU."""
     if torch.xpu.is_available():
         device = torch.device("xpu:0")  # Intel GPU
-        print("Using Intel GPU:", device)
         return device, True
     elif torch.cuda.is_available():
         device = torch.device("cuda:0")  # NVIDIA GPU fallback
-        print("Using NVIDIA GPU:", device)
         return device, True
     else:
         device = torch.device("cpu")
-        print("Using CPU:", device)
         return device, False
 
 device, gpu_avail = get_intel_gpu_device()

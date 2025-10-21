@@ -7,22 +7,19 @@ import torch
 import torch.nn.functional as F
 from typing import Tuple, Dict, Any, Callable, Optional
 import numpy as np
-
+import matplotlib.pyplot as plt
 # Intel GPU device configuration
 def get_intel_gpu_device():
     """Get Intel GPU device if available, otherwise CPU."""
     #Original code commented out for debugging:
     if torch.xpu.is_available():
         device = torch.device("xpu:0")  # Intel GPU
-        print("Using Intel GPU:", device)
         return device, True
     elif torch.cuda.is_available():
         device = torch.device("cuda:0")  # NVIDIA GPU fallback
-        print("Using NVIDIA GPU:", device)
         return device, True
     else:
         device = torch.device("cpu")
-        print("Using CPU:", device)
         return device, False
 
 device, gpu_avail = get_intel_gpu_device()
@@ -349,124 +346,13 @@ def letb_interlayer(descriptors: torch.Tensor, parameters: torch.Tensor) -> torc
     hoppings += v6 * (torch.cos(6 * theta12) + torch.cos(6 * theta21))
     
     return hoppings
-@torch.jit.script
-def get_hellman_feynman_torch_slow(
-    eigvals: torch.Tensor,
-    eigvec: torch.Tensor,
-    kpoint: torch.Tensor,
-    disp: torch.Tensor,
-    grad_hop: torch.Tensor,
-    grad_overlap: torch.Tensor,
-    hop_i: torch.Tensor,
-    hop_j: torch.Tensor,
-    hoppings: torch.Tensor,
-    overlaps: torch.Tensor,
-) -> torch.Tensor:
-    """
-    Debug-friendly Hellmann–Feynman forces via explicit summations:
-
-    F_a = - sum_i n_i sum_mu sum_nu conj(c_{mu,i}) c_{nu,i} [ dH_{mu,nu}/dR_a - eps_i dS_{mu,nu}/dR_a ]
-
-    Slow but faithful; useful for debugging against the fast path.
-    Includes amplitude and phase derivatives and enforces Hermiticity.
-    """
-    device = eigvec.device
-    dtype_c = torch.complex64
-    natoms = int(eigvec.size(0))
-    norbs = natoms
-    nocc = natoms // 2
-
-    npairs = int(hop_i.size(0))
-    if npairs == 0:
-        return torch.zeros((natoms, 3), device=device, dtype=torch.float32)
-
-    grad_hop = grad_hop.reshape(npairs, 3)
-    grad_overlap = grad_overlap.reshape(npairs, 3)
-
-    occ = torch.zeros(norbs, device=device, dtype=eigvals.dtype)
-    occ[:nocc] = 2.0
-
-    phases = torch.exp(1.0j * torch.mm(kpoint.unsqueeze(0), disp.T)).squeeze()
-
-    Forces = torch.zeros((natoms, 3), device=device, dtype=torch.float32)
-
-    # Precompute all force contributions from each pair
-    # This avoids creating full norbs×norbs matrices for each atom
-    for p in range(npairs):
-        mu = hop_i[p]
-        nu = hop_j[p]
-        
-        phase = phases[p]
-        hop = hoppings[p]
-        ovl = overlaps[p]
-        
-        for alpha in range(3):
-            k_alpha = kpoint[alpha]
-            
-            # Contribution when atom mu moves (s = -1)
-            dh_amp_mu = (0 - 1) * phase * grad_hop[p, alpha]
-            ds_amp_mu = (0 - 1) * phase * grad_overlap[p, alpha]
-            dh_phase_mu = ((0 - 1) * 1.0j * k_alpha) * phase * hop
-            ds_phase_mu = ((0 - 1) * 1.0j * k_alpha) * phase * ovl
-            
-            dH_mu_nu_mu = dh_amp_mu + dh_phase_mu
-            dS_mu_nu_mu = ds_amp_mu + ds_phase_mu
-            
-            # Contribution when atom nu moves (s = +1)
-            dh_amp_nu = (0 + 1) * phase * grad_hop[p, alpha]
-            ds_amp_nu = (0 + 1) * phase * grad_overlap[p, alpha]
-            dh_phase_nu = ((0 + 1) * 1.0j * k_alpha) * phase * hop
-            ds_phase_nu = ((0 + 1) * 1.0j * k_alpha) * phase * ovl
-            
-            dH_mu_nu_nu = dh_amp_nu + dh_phase_nu
-            dS_mu_nu_nu = ds_amp_nu + ds_phase_nu
-            
-            # Compute force contribution for atom mu
-            F_mu = torch.zeros((), device=device, dtype=dtype_c)
-            for i in range(nocc):
-                n_i = occ[i]
-                eps_i = eigvals[i]
-                c_mu = eigvec[mu, i]
-                c_nu = eigvec[nu, i]
-                c_mu_star = torch.conj(c_mu)
-                c_nu_star = torch.conj(c_nu)
-                
-                # Direct term: c_mu* c_nu (dH_mu_nu - eps_i dS_mu_nu)
-                term1 = c_mu_star * c_nu * (dH_mu_nu_mu - eps_i * dS_mu_nu_mu)
-                # Hermitian term: c_nu* c_mu (dH_nu_mu - eps_i dS_nu_mu)
-                term2 = c_nu_star * c_mu * torch.conj(dH_mu_nu_mu - eps_i * dS_mu_nu_mu)
-                
-                F_mu = F_mu - n_i * (term1 + term2)
-            
-            Forces[mu, alpha] = Forces[mu, alpha] + F_mu.real
-            
-            # Compute force contribution for atom nu
-            F_nu = torch.zeros((), device=device, dtype=dtype_c)
-            for i in range(nocc):
-                n_i = occ[i]
-                eps_i = eigvals[i]
-                c_mu = eigvec[mu, i]
-                c_nu = eigvec[nu, i]
-                c_mu_star = torch.conj(c_mu)
-                c_nu_star = torch.conj(c_nu)
-                
-                # Direct term: c_mu* c_nu (dH_mu_nu - eps_i dS_mu_nu)
-                term1 = c_mu_star * c_nu * (dH_mu_nu_nu - eps_i * dS_mu_nu_nu)
-                # Hermitian term: c_nu* c_mu (dH_nu_mu - eps_i dS_nu_mu)
-                term2 = c_nu_star * c_mu * torch.conj(dH_mu_nu_nu - eps_i * dS_mu_nu_nu)
-                
-                F_nu = F_nu - n_i * (term1 + term2)
-            
-            Forces[nu, alpha] = Forces[nu, alpha] + F_nu.real
-
-    return Forces
     
 # PyTorch-optimized Hellman-Feynman forces
+@torch.jit.script
 def get_hellman_feynman_torch(eigvals: torch.Tensor, eigvec: torch.Tensor,
                              kpoint: torch.Tensor, disp: torch.Tensor,
                              grad_hop: torch.Tensor, grad_overlap: torch.Tensor,
-                             hop_i: torch.Tensor, hop_j: torch.Tensor,
-                             hop_vals: torch.Tensor, overlap_vals: torch.Tensor) -> torch.Tensor:
+                             hop_i: torch.Tensor, hop_j: torch.Tensor) -> torch.Tensor:
     """
     PyTorch-optimized Hellman-Feynman force calculation following F = -ρ * dH/dR + ρ_e * dS/dR.
     
@@ -496,70 +382,42 @@ def get_hellman_feynman_torch(eigvals: torch.Tensor, eigvec: torch.Tensor,
     # Reshape gradients from [npairs*3] to [npairs, 3]
     grad_hop = grad_hop.reshape(npairs, 3)
     grad_overlap = grad_overlap.reshape(npairs, 3)
+    all_i_idx = torch.cat((hop_i, hop_j))
+    all_j_idx = torch.cat([hop_j, hop_i])
     
-    # Construct density matrix: ρ_uv = Σ_i^Nocc c*_ui c_vi
-    density_matrix = torch.zeros((natoms, natoms), device=eigvec.device, dtype=torch.complex64)
-    # Construct energy-weighted density matrix: ρ_e_uv = Σ_i^Nocc ε_i c*_ui c_vi
-    energy_density_matrix = torch.zeros((natoms, natoms), device=eigvec.device, dtype=torch.complex64)
+    # Get the corresponding derivative values
+    dH_values = -torch.cat((grad_hop, -grad_hop))
+    dS_values = -torch.cat((grad_overlap, -grad_overlap))
+    disp_values = torch.cat((disp,-disp))
     
     # Build density matrices from occupied states
-    fd_dist = 2 * torch.eye(natoms, dtype=eigvec.dtype, device=eigvec.device)
-    fd_dist[nocc:, nocc:] = 0
-
-    occ_eigvals = 2 * torch.diag(eigvals.to(eigvec.dtype))
-    occ_eigvals[nocc:, nocc:] = 0
-
-    density_matrix = eigvec @ fd_dist @ eigvec.H
-    energy_density_matrix = eigvec @ occ_eigvals @ eigvec.H
+    # Construct density matrix: ρ_uv = Σ_i^Nocc c*_ui c_vi
+    density_matrix = 2*eigvec[:, :nocc] @ eigvec[:, :nocc].T
+    energy_density_matrix = 2*eigvec[:, :nocc] @ torch.diag(eigvals[:nocc].to(eigvec.dtype)) @ eigvec[:, :nocc].T
 
     
     # Calculate phase factors for all pairs
-    phases = torch.exp(1.0j * torch.mm(kpoint.unsqueeze(0), disp.T)).squeeze()  # [npairs]
-    
+    phases = torch.exp(1.0j * torch.mm(kpoint.unsqueeze(0), disp_values.T)).squeeze()  # [npairs]
     # Get density matrix elements for all pairs
-    rho_ij = density_matrix[hop_i, hop_j]  # [npairs]
-    rho_e_ij = energy_density_matrix[hop_i, hop_j]  # [npairs]
+    rho_ij = density_matrix[all_i_idx, all_j_idx]  # [npairs]
+    rho_e_ij = energy_density_matrix[all_i_idx, all_j_idx]  # [npairs]
 
     # Hellmann–Feynman + Pulay: F_I = -Tr[P dH/dR_I] + Tr[W dS/dR_I]
-    # For a pair (i,j) contributing to atom i, with descriptors = (R_j - R_i + lattice shifts),
-    # dH/dR_i = -dH/d(descriptors), dS/dR_i = -dS/d(descriptors).
-    # 
-    # IMPORTANT: Keep forces complex here - they will be summed over k-points
-    # and only the real part is taken at the end (after k-point summation)
-    weight = 2.0 * (rho_ij * phases)          # [npairs] complex
-    weight_e = 2.0 * (rho_e_ij * phases)      # [npairs] complex
+    weight = (rho_ij * phases)          # [npairs] complex
+    weight_e = (rho_e_ij * phases)      # [npairs] complex
 
     # Force contribution on atom i from each pair (i,j)
-    # Sign from chain rule noted above (minus for R_i):
-    # -Tr[P dH/dR_i] -> + weight * grad_hop;  +Tr[W dS/dR_i] -> - weight_e * grad_overlap
-    # grad_hop and grad_overlap are real, so this creates complex forces
-    f_amp = weight.unsqueeze(1) * grad_hop.to(weight.dtype) - weight_e.unsqueeze(1) * grad_overlap.to(weight_e.dtype)  # [npairs, 3] complex
+    f_amp = -weight.unsqueeze(1) * dH_values.to(weight.dtype) + weight_e.unsqueeze(1) * dS_values.to(weight_e.dtype)  # [npairs, 3] complex
 
-    # Add missing phase-derivative contributions:
-    # ∂/∂R_i e^{i k·r_ij} = - i k e^{i k·r_ij}
-    # Contribution to forces:
-    #   H-term: + 2 * rho_ij * (- i k) * phase * hop_vals = -2i k * (rho_ij * phase) * hop_vals
-    #   S-term: - 2 * rho_e_ij * (- i k) * phase * overlap_vals = +2i k * (rho_e_ij * phase) * overlap_vals
-    phase_weight = -2.0j * (rho_ij * phases)        # [npairs] complex
-    phase_weight_e = 2.0j * (rho_e_ij * phases)     # [npairs] complex
-
-    # Ensure we have hop/overlap amplitudes per pair
-    if overlap_vals is None:
-        overlap_vals = torch.zeros_like(hop_vals)
-
-    # Broadcast k-vector across pairs
-    #k_vec = kpoint.to(grad_hop.dtype).unsqueeze(0)  # [1,3]
-    #f_phase_h = phase_weight.unsqueeze(1) * hop_vals.unsqueeze(1) * k_vec  # [npairs,3] complex
-    #f_phase_s = phase_weight_e.unsqueeze(1) * overlap_vals.unsqueeze(1) * k_vec  # [npairs,3] complex
-
-    f_ij = f_amp #+ f_phase_h + f_phase_s  # [npairs, 3] complex
+    f_ij = f_amp
 
     # Initialize forces tensor as COMPLEX - will be summed over k-points before taking real part
     Forces = torch.zeros((natoms, 3), device=eigvec.device, dtype=torch.complex64)
     # Accumulate to atom i and equal-and-opposite to atom j (enforce Newton's third law)
-    Forces.scatter_add_(0, hop_i.unsqueeze(1).expand(-1, 3), f_ij)
-    Forces.scatter_add_(0, hop_j.unsqueeze(1).expand(-1, 3), -f_ij)
-    
+    Forces[:,0].index_add_(0, all_i_idx, f_ij[:,0])
+    Forces[:,1].index_add_(0, all_i_idx, f_ij[:,1])
+    Forces[:,2].index_add_(0, all_i_idx, f_ij[:,2])
+    del density_matrix, energy_density_matrix, rho_ij, rho_e_ij, weight, weight_e, f_amp, f_ij
     return Forces
 
 # PyTorch-optimized utility functions
@@ -610,42 +468,34 @@ def k_path_torch(sym_pts: torch.Tensor, nk: int) -> Tuple[torch.Tensor, torch.Te
     """
     PyTorch-optimized k-path generation with Intel GPU acceleration.
     """
-    k_list = sym_pts
-    n_nodes = k_list.shape[0]
-    
-    # Calculate number of points per segment
-    points_per_segment = nk // (n_nodes - 1)
-    
-    # Create interpolation points
-    t = torch.linspace(0, 1, points_per_segment, device=sym_pts.device, dtype=sym_pts.dtype)
-    
-    kvec_list = []
-    knode = torch.zeros(n_nodes, device=sym_pts.device, dtype=sym_pts.dtype)
-    
-    for i in range(n_nodes - 1):
-        n1 = k_list[i, :]
-        n2 = k_list[i + 1, :]
-        
-        # Linear interpolation
-        diffq = n1.unsqueeze(0) + t.unsqueeze(1) * (n2 - n1).unsqueeze(0)
-        kvec_list.append(diffq)
-        
-        # Calculate distance
-        dn = torch.norm(n2 - n1)
-        knode[i + 1] = dn + knode[i]
-    
-    # Add final point
-    kvec_list.append(k_list[-1:, :])
-    
-    # Concatenate all segments
-    kvec = torch.cat(kvec_list, dim=0)
-    
-    # Calculate cumulative distances
-    dk_ = torch.zeros(kvec.shape[0], device=sym_pts.device, dtype=sym_pts.dtype)
-    for i in range(1, kvec.shape[0]):
-        dk_[i] = torch.norm(kvec[i, :] - kvec[i-1, :]) + dk_[i-1]
-    
-    return kvec, dk_, knode
+    # number of nodes
+    k_list=sym_pts
+    n_nodes=k_list.shape[0]
+
+    mesh_step = nk//(n_nodes-1)
+    mesh = torch.linspace(0,1,mesh_step)
+    step = (torch.arange(0,mesh_step,1)/mesh_step)
+
+    kvec = torch.zeros((0,3))
+    knode = torch.zeros(n_nodes)
+    for i in range(n_nodes-1):
+        n1 = k_list[i,:]
+        n2 = k_list[i+1,:]
+        diffq = torch.outer((n2 - n1),  step).T + n1
+
+        dn = torch.linalg.norm(n2-n1)
+        knode[i+1] = dn + knode[i]
+        if i==0:
+            kvec = torch.vstack((kvec,diffq))
+        else:
+            kvec = torch.vstack((kvec,diffq))
+    kvec = torch.vstack((kvec,k_list[-1,:]))
+
+    dk_ = torch.zeros(kvec.shape[0])
+    for i in range(1,kvec.shape[0]):
+        dk_[i] = torch.linalg.norm(kvec[i,:]-kvec[i-1,:]) + dk_[i-1]
+
+    return (kvec,dk_, knode)
 
 # Model function mappings for PyTorch
 def _get_hopping_model_torch(model_name: str) -> Callable:

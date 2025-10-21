@@ -14,7 +14,7 @@ from typing import Dict, Any, Tuple, Optional
 import uuid
 import copy
 import numpy as np
-
+import scipy.linalg
 # Import PyTorch-optimized modules
 from BLG_model_builder.descriptors_torch import *
 from BLG_model_builder.TB_Utils_torch import *
@@ -211,10 +211,15 @@ class TETB_model(Calculator):
         cell_length_2 = 2.46
         ncellsx = torch.ceil(torch.round(torch.linalg.norm(cell[0,:])/cell_length_1))
         ncellsy = torch.ceil(torch.round(torch.linalg.norm(cell[1,:])/cell_length_2))
-        Kx = torch.round(19 * 5/ncellsx)
-        Ky = torch.round(19 * 5/ncellsy)
+        Kx = torch.round(16 * 5/ncellsx)
+        Ky = torch.round(16 * 5/ncellsy)
         #print("auto selected kmesh = ",(Kx.item(),Ky.item(),1))
-        return (int(Kx.item()), int(Ky.item()), 1)
+        #every 3 kpoints is exactly at dirac point which causes large changes in force
+        mesh = (torch.min(torch.tensor([40,int(Kx.item())])), torch.min(torch.tensor([40,int(Ky.item())])), 1)
+        if mesh[0] % 3 == 0 or mesh[1] % 3 == 0:
+            mesh = (mesh[0] + 1, mesh[1] + 1, 1)
+        mesh = (1,1,1)
+        return mesh
 
     def calculate(self, atoms, properties=None, system_changes=all_changes):
         """Calculate properties using PyTorch-optimized methods with Intel GPU acceleration."""
@@ -329,9 +334,9 @@ class TETB_model(Calculator):
                 return torch.tensor([], device=device, dtype=torch.float32), None, torch.tensor([], device=device, dtype=torch.long), torch.tensor([], device=device, dtype=torch.long), torch.tensor([], device=device, dtype=torch.long), torch.tensor([], device=device, dtype=torch.long)
         
         if self.use_overlap:
-            return hoppings/2, overlap_elem/2, ind_i, ind_j, di, dj, grad_hoppings/2, grad_overlaps/2
+            return hoppings/2, overlap_elem/2, ind_i, ind_j, di, dj, grad_hoppings, grad_overlaps
         else:
-            return hoppings/2, None, ind_i, ind_j, di, dj, grad_hoppings/2, torch.zeros_like(grad_hoppings)
+            return hoppings/2, None, ind_i, ind_j, di, dj, grad_hoppings, torch.zeros_like(grad_hoppings)
     
     def get_tb_energy_torch(self, positions, cell, atom_types):
         """
@@ -349,17 +354,18 @@ class TETB_model(Calculator):
         hoppings, overlaps, hop_i, hop_j, hop_di, hop_dj, grad_hoppings, grad_overlaps = self.get_hoppings_torch(positions, cell, atom_types)
 
         recip_cell = get_recip_cell_torch(cell)
-        kpoints = self.kpoints_reduced @ recip_cell.T
+        kpoints = self.kpoints_reduced @ recip_cell
         
         nkp = kpoints.shape[0]
         disp = hop_di.unsqueeze(1) * cell[0] + hop_dj.unsqueeze(1) * cell[1] + \
                positions[hop_j] - positions[hop_i]
+
         
         for i in range(nkp):
             ham = self_energy * torch.eye(self.norbs, device=device, dtype=torch.complex64)
             overlap = torch.eye(self.norbs, device=device, dtype=torch.complex64) if self.use_overlap else None
             
-            phase = torch.exp(1.0j * torch.mm(kpoints[i, :].unsqueeze(0), disp.T)).squeeze()
+            phase = torch.exp(1.0j * torch.sum(kpoints[i, :].unsqueeze(0) * disp, dim=1))
             amp = hoppings * phase
             
             # Add hopping elements to Hamiltonian using PyTorch operations
@@ -368,7 +374,7 @@ class TETB_model(Calculator):
                 ham, overlap = _build_hamiltonian_with_overlap_torch(ham, hop_i, hop_j, amp, overlap, o_amp)
             else:
                 ham = _build_hamiltonian_no_overlap_torch(ham, hop_i, hop_j, amp)
-            
+
             # Full diagonalization using PyTorch
             if self.use_overlap:
                 eigvals, wf_k = _solve_eigenvalue_with_overlap_torch(ham, overlap)
@@ -380,8 +386,7 @@ class TETB_model(Calculator):
                 eigvals, wf_k,
                 kpoints[i, :], disp,
                 grad_hoppings, grad_overlaps,
-                hop_i, hop_j,
-                hoppings, overlaps if self.use_overlap else torch.zeros_like(hoppings)
+                hop_i, hop_j
             ) / nkp
             #print("force calculated for kpoint", i,"of", nkp)
             del ham,overlap,amp,phase, eigvals, wf_k
@@ -404,7 +409,7 @@ class TETB_model(Calculator):
         kmesh = self.auto_select_kpoints(cell)
         kpoints_reduced = k_uniform_mesh_torch(kmesh)
         recip_cell = get_recip_cell_torch(cell)
-        kpoints = kpoints_reduced @ recip_cell.T
+        kpoints = kpoints_reduced @ recip_cell
         
         # Get hoppings exactly like the original
         hoppings, overlaps, hop_i, hop_j, hop_di, hop_dj,_,_ = self.get_hoppings_torch(positions, cell, atom_types)
@@ -425,7 +430,7 @@ class TETB_model(Calculator):
             overlap = torch.eye(self.norbs, device=positions.device, dtype=torch.complex64) if self.use_overlap else None
             
             # Calculate phase exactly like the original
-            phase = torch.exp(1.0j * torch.mm(kpoints[i, :].unsqueeze(0), disp.T)).squeeze()
+            phase = torch.exp(1.0j * torch.sum(kpoints[i, :].unsqueeze(0) * disp, dim=1))
             amp = hoppings * phase
             
             # Build Hamiltonian using the same helper functions as the original
@@ -480,7 +485,7 @@ class TETB_model(Calculator):
         """
         self.norbs = self.norbs_per_atom * len(positions)
         
-        hoppings, overlaps, hop_i, hop_j, hop_di, hop_dj = self.get_hoppings_torch(positions, cell, atom_types)
+        hoppings, overlaps, hop_i, hop_j, hop_di, hop_dj,_,_ = self.get_hoppings_torch(positions, cell, atom_types)
         
         # Check if we have any hopping elements
         if len(hoppings) == 0:
@@ -489,7 +494,7 @@ class TETB_model(Calculator):
             return torch.zeros((self.norbs, nkp), device=device, dtype=torch.float32)
         
         recip_cell = get_recip_cell_torch(cell)
-        kpoint_path = kpoints @ recip_cell.T
+        kpoint_path = kpoints @ recip_cell
         nkp = kpoint_path.shape[0]
         eigvals_k = torch.zeros((self.norbs, nkp), device=device, dtype=torch.float32)
         
@@ -500,7 +505,7 @@ class TETB_model(Calculator):
             ham = torch.zeros((self.norbs, self.norbs), device=device, dtype=torch.complex64)
             overlap = torch.eye(self.norbs, device=device, dtype=torch.complex64) if self.use_overlap else None
             
-            phase = torch.exp(1.0j * torch.mm(kpoint_path[i, :].unsqueeze(0), disp.T)).squeeze()
+            phase = torch.exp(1.0j * torch.sum(kpoint_path[i, :].unsqueeze(0) * disp, dim=1))
             amp = hoppings * phase
             
             # Add hopping elements to Hamiltonian using PyTorch operations
@@ -518,7 +523,7 @@ class TETB_model(Calculator):
             
             eigvals_k[:, i] = eigvals
         
-        return eigvals_k
+        return eigvals_k.detach().cpu().numpy()
     
     def get_tb_energy(self, atoms):
         """
@@ -578,35 +583,21 @@ class TETB_model(Calculator):
         Returns:
             tuple: (total_energy, forces)
         """
-        # Set atoms template if not set
-        if self.atoms_template is None:
-            self.atoms_template = atoms.copy()
-        
-        # Convert ASE atoms to PyTorch tensors
-        positions, cell, atom_types = atoms_to_torch_tensors(atoms)
-        
-        # Call PyTorch-optimized function
-        return self.get_total_energy_torch(positions, cell, atom_types)
-    
-    def get_total_energy_torch(self, positions, cell, atom_types):
-        """
-        PyTorch-optimized total energy calculation with Intel GPU acceleration.
-        """
-        # Check if we have TB models
         if (self.model_dict["interlayer"]["hopping form"] is None and 
             self.model_dict["intralayer"]["hopping form"] is None):
             # Convert back to atoms for residual energy calculation
-            atoms = torch_tensors_to_atoms(positions, cell, atom_types, self.atoms_template)
             residual_energy, residual_forces = self.get_residual_energy(atoms)
             return residual_energy, residual_forces
         else:
+            # Convert ASE atoms to PyTorch tensors
+            positions, cell, atom_types = atoms_to_torch_tensors(atoms)
             tb_energy, tb_forces = self.get_tb_energy_torch(positions, cell, atom_types)
             # Convert back to atoms for residual energy calculation
-            atoms = torch_tensors_to_atoms(positions, cell, atom_types, self.atoms_template)
             residual_energy, residual_forces = self.get_residual_energy(atoms)
             total_energy = residual_energy + tb_energy
             forces = residual_forces + tb_forces
-            return total_energy, forces
+        return total_energy, forces
+    
     
     def get_residual_energy(self, atoms):
         """Get residual energy with PyTorch compatibility."""
@@ -688,24 +679,24 @@ def generalized_eigvals_torch(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
     return eigvals
 
 # PyTorch-optimized core computational functions
-@torch.jit.script
+#@torch.jit.script
 def _build_hamiltonian_no_overlap_torch(ham: torch.Tensor, hop_i: torch.Tensor, hop_j: torch.Tensor, amp: torch.Tensor) -> torch.Tensor:
     """
     PyTorch-optimized function to build Hamiltonian matrix without overlap.
     """
-    ham[hop_i, hop_j] += amp
-    ham[hop_j, hop_i] += amp.conj()
+    ham.index_put_((hop_i,hop_j), amp, accumulate=True)
+    ham.index_put_((hop_j,hop_i), amp.conj(), accumulate=True)
     return ham
 
-@torch.jit.script
+#@torch.jit.script
 def _build_hamiltonian_with_overlap_torch(ham: torch.Tensor, hop_i: torch.Tensor, hop_j: torch.Tensor, amp: torch.Tensor, overlap: torch.Tensor, o_amp: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     PyTorch-optimized function to build Hamiltonian matrix with overlap.
     """
-    ham[hop_i, hop_j] += amp
-    ham[hop_j, hop_i] += amp.conj()
-    overlap[hop_i, hop_j] += o_amp
-    overlap[hop_j, hop_i] += o_amp.conj()
+    ham.index_put_((hop_i,hop_j), amp, accumulate=True)
+    ham.index_put_((hop_j,hop_i), amp.conj(), accumulate=True)
+    overlap.index_put_((hop_i,hop_j), o_amp, accumulate=True)
+    overlap.index_put_((hop_j,hop_i), o_amp.conj(), accumulate=True)
     return ham, overlap
 
 @torch.jit.script
