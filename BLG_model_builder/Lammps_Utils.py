@@ -245,7 +245,30 @@ def write_Tersoff(params,tersoff_file):
         f.write("# format of a single entry (one or more lines):\n\
                 #   element 1, element 2, element 3,m, gamma, lambda3, c, d, costheta0, n,beta, lambda2, B, R, D, lambda1, A\n")
         f.write("C C C 3.0 1.0 0.0 "+params_str_1+" 1.95 0.15 "+params_str_2+"\n\n")
-    
+
+def read_Tersoff(tersoff_file):
+    with open(tersoff_file, 'r') as f:
+        lines = f.readlines()
+        params = []
+        for l in lines:
+            if "C C C" in l:
+                params = l.split(" ")[6:]
+                params = np.delete(params, [7,8])
+                params = np.array([float(x) for x in params])
+                break
+        return params
+
+def read_kc_insp(kc_insp_file):
+    with open(kc_insp_file, 'r') as f:
+        lines = f.readlines()
+        params = []
+        for l in lines:
+            if "C C" in l:
+                params = l.split(" ")[2:-5]
+                params = np.array([float(x) for x in params])
+                break
+        return params
+
 def check_keywords(string):
     """check to see which keywords are in string """
     keywords = ['Q_CC' ,'alpha_CC', 'A_CC','BIJc_CC1', 'BIJc_CC2', 'BIJc_CC3','Beta_CC1', 

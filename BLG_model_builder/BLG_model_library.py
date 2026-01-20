@@ -8,13 +8,29 @@ import ase.db
 import flatgraphene as fg
 import pandas as pd
 import BLG_model_builder
-from BLG_model_builder.TB_Utils_torch import *
+#from BLG_model_builder.TB_Utils_torch import *
+from BLG_model_builder.TB_Utils import *
 from BLG_model_builder.Lammps_Utils import *
-from BLG_model_builder.descriptors_torch import *
+#from BLG_model_builder.descriptors_torch import *
+from BLG_model_builder.descriptors import *
 from BLG_model_builder.BLG_potentials import *
 from BLG_model_builder.geom_tools import *
-from BLG_model_builder.TETB_model_builder_torch import *
+#from BLG_model_builder.TETB_model_builder_torch import *
+from BLG_model_builder.TETB_model_builder import *
 import matplotlib.pyplot as plt
+from scipy.interpolate import CubicSpline
+
+try:
+    import cupy
+    import cupyx as cpx
+    if cupy.cuda.is_available():
+        np = cupy
+
+        gpu_avail = True
+    else:
+        gpu_avail = False
+except:
+    gpu_avail = False
 
 def get_tb_model(int_type,tb_model):
     model_dict = {"interlayer":{"hopping form":None,"overlap form":None,
@@ -69,18 +85,38 @@ def get_tb_model(int_type,tb_model):
         model_dict["interlayer"]["hopping form"] = mk_hopping
         model_dict["interlayer"]["hopping parameters"] = np.array([-2.92500706,  4.95594733,  0.34230107])
         model_dict["interlayer"]["descriptors"] = get_disp
-        model_dict["interlayer"]["descriptor kwargs"] = {"type":"all","cutoff":5.29}
+        model_dict["interlayer"]["descriptor kwargs"] = {"type":"interlayer","cutoff":5.29}
         model_dict["interlayer"]["cutoff"] = 5.29
         model_dict["interlayer"]["hopping bounds"] = np.array([[-5,-1e-5],
                             [1e-5,5],
                             [1e-5,5]])
 
+    elif tb_model=="MLP_tb":
+        input_size = 1
+        hidden_size = 10
+        output_size = 2
+        MLP_hoppings_params = (np.random.randn(input_size, hidden_size) * np.sqrt(2./input_size)).flatten() #W1
+        MLP_hoppings_params = np.concatenate([MLP_hoppings_params, np.zeros(hidden_size)]) #b1
+        MLP_hoppings_params = np.concatenate([MLP_hoppings_params, (np.random.randn(hidden_size, hidden_size) * np.sqrt(2./hidden_size)).flatten()]) #W2
+        MLP_hoppings_params = np.concatenate([MLP_hoppings_params, np.zeros(hidden_size)]) #b2
+        MLP_hoppings_params = np.concatenate([MLP_hoppings_params, (np.random.randn(hidden_size, output_size) * np.sqrt(2./hidden_size)).flatten()]) #W3
+        MLP_hoppings_params = np.concatenate([MLP_hoppings_params, np.zeros(output_size)]) #b2
+        MLP_hoppings_bounds = np.array([[-1e2,1e2]]*MLP_hoppings_params.shape[0])
+        model_dict["interlayer"]["hopping form"] = MLP_hoppings
+        model_dict["interlayer"]["hopping parameters"] = MLP_hoppings_params
+        model_dict["interlayer"]["hopping bounds"] = MLP_hoppings_bounds
+        model_dict["interlayer"]["descriptors"] = get_disp
+        model_dict["interlayer"]["descriptor kwargs"] = {"type":"interlayer","cutoff":6}
+        model_dict["interlayer"]["cutoff"] = 6
+
     elif tb_model =="LETB":
         model_dict["interlayer"]["hopping form"] = letb_interlayer
         model_dict["intralayer"]["hopping form"] = letb_intralayer
         model_dict["interlayer"]["cutoff"] = 10
+        model_dict["interlayer"]["descriptor kwargs"] = {"cutoff":10}
         model_dict["interlayer"]["descriptors"] = letb_interlayer_descriptors
-        model_dict["intralayer"]["cutoff"] = 10
+        model_dict["intralayer"]["cutoff"] = 6
+        model_dict["intralayer"]["descriptor kwargs"] = {"cutoff":6}
         model_dict["intralayer"]["descriptors"] = letb_intralayer_descriptors
         # a0, b0, c0, a3, b3, c3, a6, b6, c6, d6
         model_dict["interlayer"]["hopping parameters"] = np.load("../parameters/letb_interlayer_parameters.npz")["parameters"]
@@ -115,6 +151,42 @@ def get_energy_model(int_type,energy_model,calc_type):
             "intralayer":{"potential":None,"potential parameters":None,"potential file writer":None}}
     use_rebo = False
     use_tersoff = True
+
+    if energy_model=="MLP":
+        if int_type=="interlayer" or int_type=="full":
+            input_size = 3
+            hidden_size = 10
+            output_size = 2
+            MLP_energy_params = (np.random.randn(input_size, hidden_size) * np.sqrt(2./input_size)).flatten() #W1
+            MLP_energy_params = np.concatenate([MLP_energy_params, np.zeros(hidden_size)]) #b1
+            MLP_energy_params = np.concatenate([MLP_energy_params, (np.random.randn(hidden_size, hidden_size) * np.sqrt(2./hidden_size)).flatten()]) #W2
+            MLP_energy_params = np.concatenate([MLP_energy_params, np.zeros(hidden_size)]) #b2
+            MLP_energy_params = np.concatenate([MLP_energy_params, (np.random.randn(hidden_size, output_size) * np.sqrt(2./hidden_size)).flatten()]) #W3
+            MLP_energy_params = np.concatenate([MLP_energy_params, np.zeros(output_size)]) #b2
+            model_dict["interlayer"]["potential"] = Interlayer_MLP
+            model_dict["interlayer"]["potential parameters"] = MLP_energy_params
+        
+        #for now just leave intralayer potential as tersoff
+        elif int_type=="intralayer" or int_type=="full":
+            if calc_type=="lammps":
+                if use_rebo:
+                    intralayer_params = np.array([0.14687637217609084,4.683462616941604,12433.64356176609,12466.479169306709,19.121905577450008,
+                                                30.504342033258325,4.636516235627607,1.3641304165817836,1.3878198074813923])
+                    model_dict["intralayer"]["potential"] = "rebo"
+                    model_dict["intralayer"]["potential parameters"] = intralayer_params
+                    model_dict["intralayer"]["potential file writer"] = write_rebo
+            elif use_tersoff:
+                intralayer_params = np.array([3.8049e4, 4.3484, -0.93000, 0.72751, 1.5724e-7,  2.2119,  430.00,   3.4879,  1393.6])
+                model_dict["intralayer"]["potential"] = "tersoff"
+                model_dict["intralayer"]["potential parameters"] = intralayer_params
+                model_dict["intralayer"]["potential file writer"] = write_Tersoff
+
+        elif calc_type=="python":
+            #c, d, costheta0, n, beta, lambda2, B, lambda1, A
+            intralayer_params = np.array([3.8049e4, 4.3484, -0.93000, 0.72751, 1.5724e-7,  2.2119,  430.00,   3.4879,  1393.6])
+            model_dict["intralayer"]["potential"] = Tersoff
+            model_dict["intralayer"]["potential parameters"] = intralayer_params
+
     if energy_model=="Classical":
         if int_type == "interlayer" or int_type=="full":
             interlayer_params = np.array([3.379423382381699, 18.184672181803677, 13.394207130830571, 0.003559135312169, 6.074935002291668,
@@ -223,6 +295,9 @@ def get_BLG_Evaluator(int_type="interlayer",energy_model="Classical",tb_model="M
     if energy_model is None:
         if tb_model == "MK":
             evaluator["hoppings"] = mk_hopping
+
+        elif tb_model == "MLP_SK":
+            evaluator["hoppings"] = MLP_SK_hoppings
 
         elif int_type=="interlayer":
             if tb_model =="SK":  
@@ -389,6 +464,47 @@ def get_training_data(model_name,supercells=20,nn_val=None):
         ydata["energy"] -= np.min(ydata["energy"]) #only want interlayer energies
         ydata_noise["energy"] = np.array(interlayer_uncertainties)
 
+    elif model_name=="interlayer energy MLP":
+        interlayer_df =  pd.read_csv('../data/qmc.csv') 
+        #augment data set with interpolation
+        interlayer_df = dict(interlayer_df)
+        interlayer_sep = np.array(interlayer_df["d"].values)
+        interlayer_stacking = np.array(interlayer_df["stacking"].values)
+        interlayer_energies = np.array(interlayer_df["energy"].values)
+        interlayer_uncertainties = np.array(interlayer_df["energy_err"].values)
+        n_augmented = 50
+        n_configs = n_augmented*4
+        interlayer_sep_mesh = np.linspace(np.min(interlayer_sep),np.max(interlayer_sep),n_configs)
+        interlayer_energies_augmented = []
+        interlayer_atom_list_augmented = []
+        interlayer_uncertainties_augmented = []
+        interlayer_sep_augmented = []
+        stackings = ["AB","SP","Mid","AA"]
+        disregistries = [0 , 0.16667, 0.5, 0.66667]
+        for i,stacking in enumerate(stackings):
+            ind = np.squeeze(np.where(interlayer_stacking == stacking))
+            interlayer_sep_stacking = interlayer_sep[ind]
+            interlayer_energies_stacking = interlayer_energies[ind]
+            interlayer_uncertainties_stacking = interlayer_uncertainties[ind]
+            cs = CubicSpline(interlayer_sep_stacking, interlayer_energies_stacking)
+            cs_uncertainties = CubicSpline(interlayer_sep_stacking, interlayer_uncertainties_stacking)
+            for sep in interlayer_sep_mesh:
+                atoms = get_bilayer_atoms(sep,disregistries[i],sc=5)
+                pos = atoms.positions
+                mean_z = np.mean(pos[:,2])
+                top_ind = np.where(pos[:,2]>mean_z)
+                mol_id = np.ones(len(atoms),dtype=np.int64)
+                mol_id[top_ind] = 2
+                atoms.set_array("mol-id",mol_id)
+                interlayer_atom_list_augmented.append(atoms)
+                interlayer_energies_augmented.append(cs(sep)*len(atoms))
+                interlayer_uncertainties_augmented.append(cs_uncertainties(sep)*len(atoms))
+                interlayer_sep_augmented.append(sep)
+        xdata["energy"] = interlayer_atom_list_augmented
+        ydata["energy"] = np.array(interlayer_energies_augmented)
+        ydata["energy"] -= np.min(ydata["energy"]) #only want interlayer energies
+        ydata_noise["energy"] = np.array(interlayer_uncertainties_augmented)
+
     elif model_name == "intralayer energy":
         interlayer_df =  pd.read_csv('../data/qmc.csv') 
         intralayer_db =  ase.db.connect('../data/monolayer_nkp121.db')
@@ -398,6 +514,17 @@ def get_training_data(model_name,supercells=20,nn_val=None):
         ydata_noise["energy"] = np.zeros_like(ydata["energy"])
 
     elif model_name == "MK hoppings":
+        hopping_data = hopping_training_data(hopping_type="all")
+        xdata_list = hopping_data["disp"]
+        ydata_list = hopping_data["hopping"]
+        xdata["hoppings"] = xdata_list[0]
+        ydata["hoppings"] = ydata_list[0]
+        for i in range(1,len(xdata_list)):
+            xdata["hoppings"] = np.vstack((xdata["hoppings"],xdata_list[i]))
+            ydata["hoppings"] = np.append(ydata["hoppings"],ydata_list[i])
+        ydata_noise["hoppings"] = np.zeros_like(ydata["hoppings"])
+
+    elif model_name == "MLP_SK hoppings":
         hopping_data = hopping_training_data(hopping_type="all")
         xdata_list = hopping_data["disp"]
         ydata_list = hopping_data["hopping"]
@@ -540,5 +667,3 @@ def get_training_data(model_name,supercells=20,nn_val=None):
         ydata_noise["hoppings"] = np.zeros_like(ydata["hoppings"])
 
     return xdata, ydata, ydata_noise
-
-

@@ -5,8 +5,10 @@ This module provides JIT-compiled and vectorized descriptor calculations.
 
 import torch
 import torch.nn.functional as F
+#from torch_cluster import radius_graph, radius
 from typing import Tuple, Dict, Any
 import numpy as np
+import scipy.spatial
 
 # Intel GPU device configuration
 def get_intel_gpu_device():
@@ -186,7 +188,7 @@ def t03_descriptors_torch(lattice_vectors: torch.Tensor, atomic_basis: torch.Ten
     return {'c': c, 'h': h, 'l': l}
 
 # PyTorch-optimized displacement calculation
-def get_disp(positions: torch.Tensor, cell: torch.Tensor, atom_types: torch.Tensor, 
+def get_disp_deprecated(positions: torch.Tensor, cell: torch.Tensor, atom_types: torch.Tensor, 
                    cutoff: float = 6.0, type: str = "all") -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     PyTorch-optimized displacement calculation with Intel GPU acceleration.
@@ -249,6 +251,166 @@ def get_disp(positions: torch.Tensor, cell: torch.Tensor, atom_types: torch.Tens
     elif type == "interlayer":
         inter_valid = atom_types[i] != atom_types[j_valid]
         return _filter_disp_torch(disp, i, j_valid, di_valid, dj_valid, inter_valid, cell, positions)
+
+def get_disp(
+    positions: torch.Tensor,
+    cell: torch.Tensor,
+    atom_types: torch.Tensor,
+    cutoff: float = 6.0,
+    type: str = "all",
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    GPU-friendly 2D displacement computation using radius_graph with periodic boundary conditions.
+
+    Args:
+        positions: (N, 3) tensor of atomic positions (Cartesian)
+        cell: (3, 3) tensor of unit cell vectors (only a1, a2 relevant for 2D)
+        atom_types: (N,) tensor of integer atom types
+        cutoff: distance cutoff [Angstrom]
+        type: "all", "intralayer", or "interlayer"
+
+    Returns:
+        disp: (M, 3) displacement vectors with PBC
+        i, j: (M,) atom index pairs
+        di, dj: (M,) integer image shifts along a1 and a2
+    """
+    """
+    Compute 2D periodic displacements (matching original get_disp)
+    using torch_cluster.radius. Self pairs are excluded.
+    """
+    device = positions.device
+    natoms = positions.shape[0]
+
+    # --- build periodic images in 2D ---
+    shifts = torch.tensor([[i, j] for i in (-1, 0, 1) for j in (-1, 0, 1)],
+                          device=device, dtype=torch.long)
+    all_pos_list, di_list, dj_list = [], [], []
+    for s in shifts:
+        all_pos_list.append(positions + s[0].float() * cell[0] + s[1].float() * cell[1])
+        di_list.append(torch.full((natoms,), s[0], dtype=torch.long, device=device))
+        dj_list.append(torch.full((natoms,), s[1], dtype=torch.long, device=device))
+
+    all_pos = torch.cat(all_pos_list, dim=0)
+    di_all = torch.cat(di_list, dim=0)
+    dj_all = torch.cat(dj_list, dim=0)
+
+    # --- radius search between central cell (y) and all images (x) ---
+    idx_a, idx_b = radius(x=all_pos, y=positions, r=cutoff, max_num_neighbors=64)
+
+    # determine which is which (neighbor vs center)
+    max_a = int(idx_a.max().item())
+    max_b = int(idx_b.max().item())
+    if max_a >= natoms and max_b < natoms:
+        neighbor_idx, center_idx = idx_a, idx_b
+    elif max_b >= natoms and max_a < natoms:
+        neighbor_idx, center_idx = idx_b, idx_a
+    else:
+        neighbor_idx, center_idx = (idx_a, idx_b) if max_a >= max_b else (idx_b, idx_a)
+
+    # map neighbor to base atom
+    j_base = neighbor_idx % natoms
+    di_valid = di_all[neighbor_idx]
+    dj_valid = dj_all[neighbor_idx]
+    i_idx = center_idx
+
+    # compute displacements
+    disp = (
+        di_valid.to(positions.dtype).unsqueeze(1) * cell[0]
+        + dj_valid.to(positions.dtype).unsqueeze(1) * cell[1]
+        + positions[j_base]
+        - positions[i_idx]
+    )
+
+    # --- filter out self pairs (zero displacement and no lattice shift) ---
+    not_self = ~((i_idx == j_base) & (di_valid == 0) & (dj_valid == 0))
+    disp = disp[not_self]
+    i_idx = i_idx[not_self]
+    j_base = j_base[not_self]
+    di_valid = di_valid[not_self]
+    dj_valid = dj_valid[not_self]
+
+    # --- optional type filtering ---
+    if type == "intralayer":
+        keep = atom_types[i_idx] == atom_types[j_base]
+    elif type == "interlayer":
+        keep = atom_types[i_idx] != atom_types[j_base]
+    else:
+        keep = torch.ones_like(i_idx, dtype=torch.bool, device=device)
+
+    disp = disp[keep]
+    i_idx = i_idx[keep]
+    j_base = j_base[keep]
+    di_valid = di_valid[keep]
+    dj_valid = dj_valid[keep]
+
+    return disp, i_idx, j_base, di_valid, dj_valid
+
+def radius(x, y, r, batch_x=None, batch_y=None, max_num_neighbors=32):
+    r"""Finds for each element in :obj:`y` all points in :obj:`x` within
+    distance :obj:`r`.
+
+    Args:
+        x (Tensor): Node feature matrix
+            :math:`\mathbf{X} \in \mathbb{R}^{N \times F}`.
+        y (Tensor): Node feature matrix
+            :math:`\mathbf{Y} \in \mathbb{R}^{M \times F}`.
+        r (float): The radius.
+        batch_x (LongTensor, optional): Batch vector
+            :math:`\mathbf{b} \in {\{ 0, \ldots, B-1\}}^N`, which assigns each
+            node to a specific example. (default: :obj:`None`)
+        batch_y (LongTensor, optional): Batch vector
+            :math:`\mathbf{b} \in {\{ 0, \ldots, B-1\}}^M`, which assigns each
+            node to a specific example. (default: :obj:`None`)
+        max_num_neighbors (int, optional): The maximum number of neighbors to
+            return for each element in :obj:`y`. (default: :obj:`32`)
+
+    :rtype: :class:`LongTensor`
+
+    .. testsetup::
+
+        import torch
+        from torch_cluster import radius
+
+    .. testcode::
+
+
+        >>> x = torch.Tensor([[-1, -1], [-1, 1], [1, -1], [1, 1]])
+        >>> batch_x = torch.tensor([0, 0, 0, 0])
+        >>> y = torch.Tensor([[-1, 0], [1, 0]])
+        >>> batch_y = torch.tensor([0, 0])
+        >>> assign_index = radius(x, y, 1.5, batch_x, batch_y)
+    """
+
+    if batch_x is None:
+        batch_x = x.new_zeros(x.size(0), dtype=torch.long)
+
+    if batch_y is None:
+        batch_y = y.new_zeros(y.size(0), dtype=torch.long)
+
+    x = x.view(-1, 1) if x.dim() == 1 else x
+    y = y.view(-1, 1) if y.dim() == 1 else y
+
+    assert x.dim() == 2 and batch_x.dim() == 1
+    assert y.dim() == 2 and batch_y.dim() == 1
+    assert x.size(1) == y.size(1)
+    assert x.size(0) == batch_x.size(0)
+    assert y.size(0) == batch_y.size(0)
+
+    #if x.is_cuda:
+    #    return torch_cluster.radius_cuda.radius(x, y, r, batch_x, batch_y,
+    #                                            max_num_neighbors)
+
+    x = torch.cat([x, 2 * r * batch_x.view(-1, 1).to(x.dtype)], dim=-1)
+    y = torch.cat([y, 2 * r * batch_y.view(-1, 1).to(y.dtype)], dim=-1)
+
+    tree = scipy.spatial.cKDTree(x.detach().numpy())
+    _, col = tree.query(
+        y.detach().numpy(), k=max_num_neighbors, distance_upper_bound=r + 1e-8)
+    col = [torch.from_numpy(c).to(torch.long) for c in col]
+    row = [torch.full_like(c, i) for i, c in enumerate(col)]
+    row, col = torch.cat(row, dim=0), torch.cat(col, dim=0)
+    mask = col < int(tree.n)
+    return torch.stack([row[mask], col[mask]], dim=0)
 
 def _filter_disp_torch(disp: torch.Tensor, i: torch.Tensor, j: torch.Tensor, 
                       di: torch.Tensor, dj: torch.Tensor, valid_mask: torch.Tensor,
@@ -401,3 +563,24 @@ def torch_tensors_to_atoms(positions: torch.Tensor, cell: torch.Tensor, atom_typ
     atoms.set_cell(cell.detach().cpu().numpy())
     atoms.set_array("mol-id", atom_types.detach().cpu().numpy())
     return atoms
+
+if __name__ == "__main__":
+    from ase.build import graphene
+    from ase.build import make_supercell
+    import matplotlib.pyplot as plt
+    atoms = graphene(a=2.46,vacuum=10)
+    atoms = make_supercell(atoms, [[2, 0, 0], [0, 2, 0], [0, 0, 1]])
+    positions, cell, atom_types = atoms_to_torch_tensors(atoms)
+    disp_old, io, jo, dio, djo = get_disp(positions, cell, atom_types, cutoff=6.0, type="all")
+    disp_new, inew, jnew, dinew, djnew = get_disp_radius_pbc(positions, cell, atom_types, cutoff=6.0, type="all")
+
+    plt.hist(torch.norm(disp_old, dim=1),bins=25)
+    plt.hist(torch.norm(disp_new, dim=1),bins=25)
+    plt.show()
+    print(disp_old.shape)
+    print(disp_new.shape)
+    dist_old_sorted,_ = torch.sort(torch.norm(disp_old, dim=1))
+    dist_new_sorted,_ = torch.sort(torch.norm(disp_new, dim=1))
+    print(torch.linalg.norm(dist_old_sorted - dist_new_sorted))
+    print(dist_old_sorted[:10])
+    print(dist_new_sorted[:10])

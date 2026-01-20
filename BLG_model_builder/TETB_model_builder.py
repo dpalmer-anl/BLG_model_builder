@@ -112,10 +112,10 @@ class TETB_model(Calculator):
         cell_length_2 = 2.46
         ncellsx = np.ceil(np.round(np.linalg.norm(cell[0,:])/cell_length_1))
         ncellsy = np.ceil(np.round(np.linalg.norm(cell[1,:])/cell_length_2))
-        Kx = round(16 * 5/ncellsx)
-        Ky = round(16 * 5/ncellsy)
-        print("auto selected kmesh = ",(Kx,Ky,1))
-        return (Kx,Ky,1)
+        Kx = np.round(16 * 5/ncellsx)
+        Ky = np.round(16 * 5/ncellsy)
+        print("auto selected kmesh = ",(1,1,1))
+        return (1,1,1)
 
     def set_params(self,x):
         """x is an array of the dimension of total parameters """
@@ -317,9 +317,10 @@ class TETB_model(Calculator):
             efermi = (self.eigvals[self.norbs//2]+self.eigvals[(self.norbs-1)//2])/2
             self.tb_energy += 2 * np.sum(self.eigvals[:nocc])/self.nkp
             del ham
-            del overlap
             del amp
-            del o_amp
+            if self.use_overlap:
+                del overlap
+                del o_amp
             #self.Forces += get_hellman_feynman(atoms, disp,hop_i,hop_j,wf_k,self.kpoints[i,:],
             #    self.model_dict["interlayer"]["hopping form"], self.model_dict["interlayer"]["hopping parameters"],overlap=self.model_dict[""])/self.nkp 
             self.Forces += get_hellman_feynman(positions, mol_id, cell, self.eigvals,wf_k, {"interlayer":"popov","intralayer":"porezag"},self.kpoints[i,:],
@@ -470,6 +471,7 @@ class TETB_model(Calculator):
                 ham[hop_i,hop_j] += amp
                 ham[hop_j,hop_i] += np.conj(amp)
                 if self.use_overlap:
+                    o_amp = overlaps * phase
                     overlap[hop_i,hop_j] +=   o_amp
                     overlap[hop_j,hop_i] +=  np.conj(o_amp)
 
@@ -540,7 +542,9 @@ class TETB_model(Calculator):
             total_energy = residual_energy + tb_energy
             forces = residual_forces + tb_forces
             return  total_energy , forces
-    
+    #def get_potential_energy(self,atoms):
+    #    return self.get_total_energy(atoms)[0]
+        
     def evaluate_residual_energy(self,atoms,parameters):
         start_ind = 0
         for i,m in enumerate(self.model_dict):

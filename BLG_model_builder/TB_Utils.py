@@ -2,6 +2,8 @@ from scipy.spatial.distance import cdist
 import numpy as np
 import matplotlib.pyplot as plt
 from BLG_model_builder.descriptors import *
+from BLG_model_builder.MLP import *
+import torch
 try:
     import cupy
     import cupyx as cpx
@@ -336,8 +338,9 @@ def letb_intralayer(descriptors,parameters,grad=False):
     # Anything else, we zero out
     t00 = (distances < 0.95 * min_distance) | (distances > 1.05 * 2 * min_distance)
     dsc_array_1 = descriptors[0]["a"]
-    dsc_array_2 = np.vstack([np.asarray(descriptors[1][key]) for key in descriptors]).T
-    dsc_array_3 = np.vstack([np.asarray(descriptors[2][key]) for key in descriptors]).T
+    
+    dsc_array_2 = np.vstack([np.asarray(descriptors[1][key]) for key in descriptors[1]]).T
+    dsc_array_3 = np.vstack([np.asarray(descriptors[2][key]) for key in descriptors[2]]).T
     hoppings = np.zeros(len(distances))
     hoppings[t01_ix] = letb_intralayer_t01(dsc_array_1,t01_params)
     hoppings[t02_ix] = letb_intralayer_t02(dsc_array_2,t02_params)
@@ -365,7 +368,8 @@ def letb_interlayer(descriptors,parameters,grad=False):
         r = descriptors[:,0]
         theta12 = descriptors[:,1]
         theta21 = descriptors[:,2]
-    r = r / 4.649 
+    
+    r = np.asarray(r) / 4.649 
     v0 = a0 * np.exp(-b0 * np.power(r, 2)) * np.cos(c0 * r)
     v3 = a3 * (np.power(r, 2)) * np.exp(-b3 * np.power((r - c3) , 2)) 
     v6 =  a6 * np.exp(-b6 * np.power((r - c6),2)) * np.sin(d6 * r)
@@ -375,6 +379,27 @@ def letb_interlayer(descriptors,parameters,grad=False):
 
     return hoppings
 
+def get_MLP_SK_hoppings_func(model):
+    """requires input dim = 1 and output dim = 2, and model to be a MLP_numpy object"""
+    def func(descriptors, parameters):
+        model.set_parameters(parameters)
+        r = np.linalg.norm(descriptors,axis=1)
+        n = (descriptors[:,2]) / r
+        output = model.forward(r)
+        #physics inspired hoppings 
+        hoppings = (1-n**2) * output[:,0]  + n**2 * output[:,1]
+
+        return hoppings
+    return func
+
+def MLP_SK_hoppings_torch(descriptors, model):
+    r = torch.linalg.norm(descriptors,axis=1)
+    n = (descriptors[:,2]) / r
+    z3 = model(r)
+    #physics inspired hoppings 
+    hoppings = (1-n**2) * z3[:,0]  + n**2 * z3[:,1]
+
+    return hoppings
 ############################################################################################
 
 # Hellman-Feynman forces

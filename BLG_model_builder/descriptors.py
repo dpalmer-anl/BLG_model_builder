@@ -351,6 +351,7 @@ def letb_interlayer_descriptors(atoms,cutoff=6):
     #df = df[inter_valid_indices]
     output['dxy'] = dist_xy[inter_valid_indices]
     output['dz'] = dist_z[inter_valid_indices]
+    output['d'] = dist[inter_valid_indices]
     output["theta_12"] = theta_12[inter_valid_indices]
     output['theta_21'] = theta_21[inter_valid_indices]
     

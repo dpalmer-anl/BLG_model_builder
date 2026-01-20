@@ -39,7 +39,7 @@ def get_potential_energy(atoms,parameters,pe_funcs,r_cut=10):
 
 
 
-def get_normal_vect(atoms,n_norms=3):
+def get_normal_vect_depr(atoms,n_norms=3):
 
     normal_vectors = np.zeros((len(atoms),3))
     for i in range(len(atoms)):
@@ -270,9 +270,6 @@ def Kolmogorov_Crespi_vdw(atoms,parameters,cutoff=10,**kwargs):
 
     return V,forces/2
 
-
-
-
 def Kolmogorov_Crespi(atoms,parameters,cutoff=10,**kwargs):
     #'z0', 'C0', 'C2', 'C4', 'C', 'delta', 'lambda', 'A'
     meV = 1e-3 #in order to match lammps, scale variables
@@ -314,6 +311,81 @@ def Kolmogorov_Crespi(atoms,parameters,cutoff=10,**kwargs):
     V = 0.5 *  np.sum(V_ij*Taper)
     return V
 
+def get_normal_vect(intra_disp, intra_indi ,intra_indj):
+    normal_vectors = np.zeros((len(atoms),3))
+    alpha = np.zeros(len(atoms))
+    a0 = 1.42
+    mean_length = 0.326 #average length of C pz orbital
+    for i in range(len(atoms)):
+        distances = np.linalg.norm(intra_disp[intra_indi==i],axis=1)
+        nn_ind = np.argsort(distances)[:3]
+        alpha_i[i] = mean_length * np.mean(np.abs(((distances-nn_ind-a0)/a0)))
+        disp_nn = displacements[nn_ind[:2],:]
+        normal_vectors[i] = np.cross(disp_nn[0,:],disp_nn[1,:])
+    normal_vectors_norm = np.linalg.norm(normal_vectors,axis=1)
+    normal_vectors = normal_vectors/normal_vectors_norm[:,np.newaxis]
+    return normal_vectors, alpha
+
+def Interlayer_MLP(atoms,parameters,cutoff=10,hidden_size=10,**kwargs):
+    meV = 1e-3 #in order to match lammps, scale variables
+    z0 = 3.35
+    lambda_val = 3.293
+    #construct MLP from parameters
+    input_size = 3 # alpha_ij, rho_ij, inter_dist
+    output_size = 2
+    W1 = np.reshape(parameters[:input_size*hidden_size], (input_size, hidden_size))
+    b1 = np.reshape(parameters[input_size*hidden_size:input_size*hidden_size+hidden_size], (1, hidden_size))
+    W2 = np.reshape(parameters[input_size*hidden_size+hidden_size:input_size*hidden_size+hidden_size+hidden_size*output_size], (hidden_size, output_size))
+    b2 = np.reshape(parameters[input_size*hidden_size+hidden_size+hidden_size*output_size:], (1, output_size))
+
+    #separate intra and interlayer displacements
+    disp, i, j, di, dj = get_disp(atoms,cutoff=cutoff)
+    atom_types = atoms.get_array("mol-id")
+    cell = atoms.get_cell()
+    positions = atoms.positions
+    intra_valid_indices = atom_types[i] == atom_types[j]
+    intra_indi = i[intra_valid_indices]
+    intra_indj =j[intra_valid_indices]
+    intra_disp = di[intra_valid_indices, np.newaxis] * cell[0] +\
+                    dj[intra_valid_indices, np.newaxis] * cell[1] +\
+                    positions[intra_indj] - positions[intra_indi]
+    inter_valid_indices = atom_types[i] != atom_types[j]
+    inter_indi = i[inter_valid_indices]
+    inter_indj = j[inter_valid_indices]
+    inter_di = di[inter_valid_indices]
+    inter_dj = dj[inter_valid_indices]
+
+    inter_disp = di[inter_valid_indices, np.newaxis] * cell[0] +\
+                        dj[inter_valid_indices, np.newaxis] * cell[1] +\
+                        positions[inter_indj] - positions[inter_indi]
+    inter_dist = np.linalg.norm(inter_disp,axis=1)
+
+    normal_vectors,alpha = get_normal_vect(intra_disp, intra_indi ,intra_indj)
+    ni_dot_d = np.sum( normal_vectors[inter_indi] * inter_disp,axis=1)
+    rhoij =np.sqrt(inter_dist**2- (ni_dot_d)**2)
+    alpha_ij = (alpha[inter_indi] + alpha[inter_indj])/2
+    
+    ni = normal_vectors[inter_indi]
+    nj = normal_vectors[inter_indj]
+    rhat = inter_disp/inter_dist[:,np.newaxis]
+    r_alpha = inter_dist/alpha_ij
+
+    S_ij = (np.dot(ni,rhat) * np.dot(nj,rhat))*np.exp(-r_alpha/2)*(-1-r_alpha/2 - r_alpha**2/20 + r_alpha**3/120) +\
+            (np.dot(ni,nj)-np.dot(ni,rhat) * np.dot(nj,rhat))*np.exp(-r_alpha/2)*(1+r_alpha/2 - r_alpha**2/10)
+
+    descriptors = np.stack([S_ij, rhoij, inter_dist], axis=1)
+    #layer 1
+    z1 = np.dot(descriptors, W1) + b1
+    a1 = np.maximum(0, z1) # ReLU activation function
+    
+    # Layer 2 (Output)
+    output = np.dot(a1, W2) + b2 
+    
+    x = dist/cutoff
+    Taper =  20*np.power(x,7) - 70*np.power(x,7) + 84*np.power(x,5) - 35*np.power(x,4) +1
+    V_ij = np.exp(-lambda_val*(inter_dist - z0)) * output[:,0] - output[:,1]*np.power(inter_dist/z0,-6)
+    V = 0.5 *  np.sum(V_ij*Taper)
+    return V
 
 if __name__ == "__main__":
     import flatgraphene as fg
