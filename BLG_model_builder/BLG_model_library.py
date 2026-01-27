@@ -85,7 +85,7 @@ def get_tb_model(int_type,tb_model):
         model_dict["interlayer"]["hopping form"] = mk_hopping
         model_dict["interlayer"]["hopping parameters"] = np.array([-2.92500706,  4.95594733,  0.34230107])
         model_dict["interlayer"]["descriptors"] = get_disp
-        model_dict["interlayer"]["descriptor kwargs"] = {"type":"interlayer","cutoff":5.29}
+        model_dict["interlayer"]["descriptor kwargs"] = {"type":"all","cutoff":5.29}
         model_dict["interlayer"]["cutoff"] = 5.29
         model_dict["interlayer"]["hopping bounds"] = np.array([[-5,-1e-5],
                             [1e-5,5],
@@ -106,7 +106,7 @@ def get_tb_model(int_type,tb_model):
         model_dict["interlayer"]["hopping parameters"] = MLP_hoppings_params
         model_dict["interlayer"]["hopping bounds"] = MLP_hoppings_bounds
         model_dict["interlayer"]["descriptors"] = get_disp
-        model_dict["interlayer"]["descriptor kwargs"] = {"type":"interlayer","cutoff":6}
+        model_dict["interlayer"]["descriptor kwargs"] = {"type":"all","cutoff":6}
         model_dict["interlayer"]["cutoff"] = 6
 
     elif tb_model =="LETB":
@@ -594,8 +594,9 @@ def get_training_data(model_name,supercells=20,nn_val=None):
         ydata["hoppings"] = np.array(intralayer_energies)
         ydata_noise["hoppings"] = np.zeros_like(intralayer_energies)
 
-    elif "intralayer_LETB hoppings" in model_name:
+    elif "intralayer_LETB" in model_name:
         intralayer_hopping_data = hopping_training_data(hopping_type="intralayer")
+        nn_val = int(model_name.split("_")[-1].split(" ")[0])
 
         atoms_list = intralayer_hopping_data["atoms"]
         i_list = intralayer_hopping_data["i"]

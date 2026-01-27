@@ -20,15 +20,20 @@ class MLP(nn.Module):
     Input: descriptors (vector)
     Output: predicted value
     """
-    def __init__(self, input_dim=1, hidden_dim=64, output_dim=2):
+    def __init__(self, input_dim=1, hidden_dim=64, output_dim=2, num_layers=1):
         super().__init__()
-        self.mlp = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, output_dim)
-        )
+        if num_layers < 1:
+            raise ValueError("Num_layers must be at least 1")
+
+        layers = [nn.Linear(input_dim, hidden_dim), nn.ReLU()]
+
+        # Additional hidden layers with size (hidden_dim, hidden_dim)
+        for _ in range(num_layers - 1):
+            layers.append(nn.Linear(hidden_dim, hidden_dim))
+            layers.append(nn.ReLU())
+
+        layers.append(nn.Linear(hidden_dim, output_dim))
+        self.mlp = nn.Sequential(*layers)
     
     def forward(self, descriptors):
         """
@@ -44,22 +49,37 @@ class MLP(nn.Module):
 class MLP_numpy:
     """
     General MLP-based function reconstructed from PyTorch logic.
-    Supports 2 hidden layers with ReLU activation.
+    Supports configurable hidden layers with ReLU activation.
     """
-    def __init__(self, input_dim=1, hidden_dim=64, output_dim=2):
+    def __init__(self, input_dim=1, hidden_dim=64, output_dim=2, num_layers=1):
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.output_dim = output_dim
+        self.num_layers = num_layers
+
+        if self.num_layers < 1:
+            raise ValueError("Num_layers must be at least 1")
         
         # Initialization (He initialization for ReLU)
-        self.W1 = np.random.randn(input_dim, hidden_dim) * np.sqrt(2./input_dim)
-        self.b1 = np.zeros((1, hidden_dim))
-        
-        self.W2 = np.random.randn(hidden_dim, hidden_dim) * np.sqrt(2./hidden_dim)
-        self.b2 = np.zeros((1, hidden_dim))
-        
-        self.W3 = np.random.randn(hidden_dim, output_dim) * np.sqrt(2./hidden_dim)
-        self.b3 = np.zeros((1, output_dim))
+        self.weights = []
+        self.biases = []
+
+        # First layer maps input_dim -> hidden_dim
+        self.weights.append(np.random.randn(input_dim, hidden_dim) * np.sqrt(2.0 / input_dim))
+        self.biases.append(np.zeros((1, hidden_dim)))
+
+        # Additional hidden layers (hidden_dim -> hidden_dim)
+        for _ in range(self.num_layers - 1):
+            self.weights.append(np.random.randn(hidden_dim, hidden_dim) * np.sqrt(2.0 / hidden_dim))
+            self.biases.append(np.zeros((1, hidden_dim)))
+
+        # Output layer
+        self.W_out = np.random.randn(hidden_dim, output_dim) * np.sqrt(2.0 / hidden_dim)
+        self.b_out = np.zeros((1, output_dim))
+
+        # Keep shapes for parameter reconstruction
+        self.weight_shapes = [w.shape for w in self.weights]
+        self.bias_shapes = [b.shape for b in self.biases]
 
     def relu(self, x):
         return np.maximum(0, x)
@@ -74,88 +94,115 @@ class MLP_numpy:
         # Equivalent to descriptors.unsqueeze(1) in PyTorch
         if descriptors.ndim == 1:
             descriptors = descriptors[:, np.newaxis]
-        
-        # Layer 1
-        self.z1 = np.dot(descriptors, self.W1) + self.b1
-        self.a1 = self.relu(self.z1)
-        
-        # Layer 2
-        self.z2 = np.dot(self.a1, self.W2) + self.b2
-        self.a2 = self.relu(self.z2)
-        
-        # Layer 3 (Output)
-        self.z3 = np.dot(self.a2, self.W3) + self.b3
-        
-        return self.z3
+
+        self.activations = [descriptors]
+        self.zs = []
+
+        # Hidden layers
+        a = descriptors
+        for W, b in zip(self.weights, self.biases):
+            z = np.dot(a, W) + b
+            a = self.relu(z)
+            self.zs.append(z)
+            self.activations.append(a)
+
+        # Output layer (no activation)
+        self.z_out = np.dot(a, self.W_out) + self.b_out
+
+        return self.z_out
 
     def get_parameters(self):
         """Returns all parameters as a single 1D vector."""
-        return np.concatenate([
-            self.W1.ravel(), self.b1.ravel(),
-            self.W2.ravel(), self.b2.ravel(),
-            self.W3.ravel(), self.b3.ravel()
-        ])
+        params = []
+        for W, b in zip(self.weights, self.biases):
+            params.append(W.ravel())
+            params.append(b.ravel())
+        params.append(self.W_out.ravel())
+        params.append(self.b_out.ravel())
+        return np.concatenate(params)
 
     def set_parameters(self, parameters):
         """Reconstructs matrices from a 1D vector."""
         idx = 0
-        
-        # W1, b1
-        size = self.input_dim * self.hidden_dim
-        self.W1 = parameters[idx:idx+size].reshape(self.input_dim, self.hidden_dim)
-        idx += size
-        size = self.hidden_dim
-        self.b1 = parameters[idx:idx+size].reshape(1, self.hidden_dim)
-        idx += size
-        
-        # W2, b2
-        size = self.hidden_dim * self.hidden_dim
-        self.W2 = parameters[idx:idx+size].reshape(self.hidden_dim, self.hidden_dim)
-        idx += size
-        size = self.hidden_dim
-        self.b2 = parameters[idx:idx+size].reshape(1, self.hidden_dim)
-        idx += size
-        
-        # W3, b3
+
+        for i, shape in enumerate(self.weight_shapes):
+            size = np.prod(shape)
+            self.weights[i] = parameters[idx:idx + size].reshape(shape)
+            idx += size
+
+            size = np.prod(self.bias_shapes[i])
+            self.biases[i] = parameters[idx:idx + size].reshape(self.bias_shapes[i])
+            idx += size
+
+        # Output layer
         size = self.hidden_dim * self.output_dim
-        self.W3 = parameters[idx:idx+size].reshape(self.hidden_dim, self.output_dim)
+        self.W_out = parameters[idx:idx + size].reshape(self.hidden_dim, self.output_dim)
         idx += size
         size = self.output_dim
-        self.b3 = parameters[idx:idx+size].reshape(1, self.output_dim)
+        self.b_out = parameters[idx:idx + size].reshape(1, self.output_dim)
 
     def backward(self, descriptors, targets, output):
         """
-        Manual backprop for 2-hidden layer MLP.
+        Manual backprop for configurable hidden-layer MLP.
         Assumes Mean Squared Error Loss.
         """
+        if descriptors.ndim == 1:
+            descriptors = descriptors[:, np.newaxis]
+
         m = descriptors.shape[0]  # Batch size
-        
-        # --- 1. Output Layer Gradient (z3) ---
-        # dLoss/dz3 = (dLoss/dOutput) * (dOutput/dz3)
-        # For MSE: 2/m * (output - targets)
-        dz3 = (2.0 / m) * (output - targets)
-        
-        # Gradients for W3 and b3
-        dW3 = np.dot(self.a2.T, dz3)
-        db3 = np.sum(dz3, axis=0, keepdims=True)
-        
-        # --- 2. Second Hidden Layer Gradient (z2) ---
-        # dLoss/da2 = dz3 * W3^T
-        da2 = np.dot(dz3, self.W3.T)
-        # dLoss/dz2 = da2 * ReLU'(z2)
-        dz2 = da2 * (self.z2 > 0) 
-        
-        dW2 = np.dot(self.a1.T, dz2)
-        db2 = np.sum(dz2, axis=0, keepdims=True)
-        
-        # --- 3. First Hidden Layer Gradient (z1) ---
-        # dLoss/da1 = dz2 * W2^T
-        da1 = np.dot(dz2, self.W2.T)
-        # dLoss/dz1 = da1 * ReLU'(z1)
-        dz1 = da1 * (self.z1 > 0)
-        
-        # descriptors.T is the 'a0' layer
-        dW1 = np.dot(descriptors.T, dz1)
-        db1 = np.sum(dz1, axis=0, keepdims=True)
-        
-        return dW1, db1, dW2, db2, dW3, db3
+
+        # --- Output Layer Gradient ---
+        dz = (2.0 / m) * (output - targets)  # dLoss/dz_out
+        dW_out = np.dot(self.activations[-1].T, dz)
+        db_out = np.sum(dz, axis=0, keepdims=True)
+
+        dWs = []
+        dBs = []
+
+        # Backprop through hidden layers
+        da = np.dot(dz, self.W_out.T)
+        for i in reversed(range(len(self.weights))):
+            z = self.zs[i]
+            dz_hidden = da * (z > 0)  # ReLU derivative
+            a_prev = self.activations[i]
+
+            dW = np.dot(a_prev.T, dz_hidden)
+            db = np.sum(dz_hidden, axis=0, keepdims=True)
+
+            dWs.insert(0, dW)
+            dBs.insert(0, db)
+
+            da = np.dot(dz_hidden, self.weights[i].T)
+
+        return dWs, dBs, dW_out, db_out
+
+    def backward(self, descriptors):
+        """
+        Compute the Jacobian of the network outputs with respect to the inputs.
+        Returns an array with shape (N, output_dim, input_dim) where
+        jac[n, o, d] = d output_o / d descriptor_d for sample n.
+        """
+        # Ensure caches are populated for the provided descriptors
+        _ = self.forward(descriptors)
+
+        batch = descriptors.shape[0] if descriptors.ndim > 1 else 1
+        jac = np.zeros((batch, self.output_dim, self.input_dim))
+
+        for n in range(batch):
+            # Start from output layer: W_out^T has shape (output_dim, hidden_dim)
+            g = self.W_out.T.copy()  # (output_dim, hidden_dim)
+
+            # Propagate through hidden layers in reverse
+            for i in reversed(range(len(self.weights))):
+                z = self.zs[i][n]  # pre-activation for sample n at layer i
+                relu_grad = (z > 0).astype(float)  # (hidden_dim,)
+
+                # Apply elementwise ReLU derivative to each column of g
+                g = g * relu_grad  # broadcast over rows of g
+
+                # Move gradient to previous layer/input
+                g = g @ self.weights[i].T  # (output_dim, prev_dim)
+
+            jac[n] = g
+
+        return jac

@@ -395,10 +395,9 @@ def get_MLP_SK_hoppings_func(model):
 def MLP_SK_hoppings_torch(descriptors, model):
     r = torch.linalg.norm(descriptors,axis=1)
     n = (descriptors[:,2]) / r
-    z3 = model(r)
+    output = model(r)
     #physics inspired hoppings 
-    hoppings = (1-n**2) * z3[:,0]  + n**2 * z3[:,1]
-
+    hoppings = (1-n**2) * output[:,0]  + n**2 * output[:,1]
     return hoppings
 ############################################################################################
 

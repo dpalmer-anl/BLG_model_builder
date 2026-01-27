@@ -311,43 +311,58 @@ def Kolmogorov_Crespi(atoms,parameters,cutoff=10,**kwargs):
     V = 0.5 *  np.sum(V_ij*Taper)
     return V
 
-def get_normal_vect(intra_disp, intra_indi ,intra_indj):
-    normal_vectors = np.zeros((len(atoms),3))
-    alpha = np.zeros(len(atoms))
-    a0 = 1.42
-    mean_length = 0.326 #average length of C pz orbital
-    for i in range(len(atoms)):
-        distances = np.linalg.norm(intra_disp[intra_indi==i],axis=1)
-        nn_ind = np.argsort(distances)[:3]
-        alpha_i[i] = mean_length * np.mean(np.abs(((distances-nn_ind-a0)/a0)))
-        disp_nn = displacements[nn_ind[:2],:]
-        normal_vectors[i] = np.cross(disp_nn[0,:],disp_nn[1,:])
-    normal_vectors_norm = np.linalg.norm(normal_vectors,axis=1)
-    normal_vectors = normal_vectors/normal_vectors_norm[:,np.newaxis]
-    return normal_vectors, alpha
+def get_normal_vect(intra_disp, intra_indi ,intra_indj, n_atoms):
+    """
+    Estimate surface normals for each atom from two closest intralayer neighbours.
+    """
+    if torch.is_tensor(intra_disp):
+        intra_disp_np = intra_disp.detach().cpu().numpy()
+        intra_indi_np = intra_indi.detach().cpu().numpy()
+        intra_indj_np = intra_indj.detach().cpu().numpy()
+    else:
+        intra_disp_np = intra_disp
+        intra_indi_np = intra_indi
+        intra_indj_np = intra_indj
 
-def Interlayer_MLP(atoms,parameters,cutoff=10,hidden_size=10,**kwargs):
-    meV = 1e-3 #in order to match lammps, scale variables
+    normal_vectors = np.zeros((n_atoms,3))
+    for i in range(n_atoms):
+        mask = intra_indi_np==i
+        if not np.any(mask):
+            continue
+        distances = np.linalg.norm(intra_disp_np[mask],axis=1)
+        nn_ind = np.argsort(distances)[:2]
+        disp_nn = intra_disp_np[mask][nn_ind,:]
+        if disp_nn.shape[0] < 2:
+            continue
+        nvec = np.cross(disp_nn[0,:],disp_nn[1,:])
+        norm = np.linalg.norm(nvec)
+        if norm > 0:
+            normal_vectors[i] = nvec/norm
+    return normal_vectors
+
+def Interlayer_MLP_torch(atoms,model,cutoff=10):
     z0 = 3.35
     lambda_val = 3.293
-    #construct MLP from parameters
-    input_size = 3 # alpha_ij, rho_ij, inter_dist
-    output_size = 2
-    W1 = np.reshape(parameters[:input_size*hidden_size], (input_size, hidden_size))
-    b1 = np.reshape(parameters[input_size*hidden_size:input_size*hidden_size+hidden_size], (1, hidden_size))
-    W2 = np.reshape(parameters[input_size*hidden_size+hidden_size:input_size*hidden_size+hidden_size+hidden_size*output_size], (hidden_size, output_size))
-    b2 = np.reshape(parameters[input_size*hidden_size+hidden_size+hidden_size*output_size:], (1, output_size))
+    eps = 1e-12
 
     #separate intra and interlayer displacements
     disp, i, j, di, dj = get_disp(atoms,cutoff=cutoff)
     atom_types = atoms.get_array("mol-id")
     cell = atoms.get_cell()
     positions = atoms.positions
+    disp = torch.as_tensor(disp, dtype=torch.get_default_dtype())
+    i = torch.as_tensor(i, dtype=torch.long)
+    j = torch.as_tensor(j, dtype=torch.long)
+    di = torch.as_tensor(di, dtype=torch.get_default_dtype())
+    dj = torch.as_tensor(dj, dtype=torch.get_default_dtype())
+    cell = torch.as_tensor(np.asarray(cell), dtype=torch.get_default_dtype())
+    positions = torch.as_tensor(positions, dtype=torch.get_default_dtype())
+    atom_types = torch.as_tensor(atom_types, dtype=torch.long)
     intra_valid_indices = atom_types[i] == atom_types[j]
     intra_indi = i[intra_valid_indices]
     intra_indj =j[intra_valid_indices]
-    intra_disp = di[intra_valid_indices, np.newaxis] * cell[0] +\
-                    dj[intra_valid_indices, np.newaxis] * cell[1] +\
+    intra_disp = di[intra_valid_indices, None] * cell[0] +\
+                    dj[intra_valid_indices, None] * cell[1] +\
                     positions[intra_indj] - positions[intra_indi]
     inter_valid_indices = atom_types[i] != atom_types[j]
     inter_indi = i[inter_valid_indices]
@@ -355,48 +370,177 @@ def Interlayer_MLP(atoms,parameters,cutoff=10,hidden_size=10,**kwargs):
     inter_di = di[inter_valid_indices]
     inter_dj = dj[inter_valid_indices]
 
-    inter_disp = di[inter_valid_indices, np.newaxis] * cell[0] +\
-                        dj[inter_valid_indices, np.newaxis] * cell[1] +\
+    inter_disp = di[inter_valid_indices, None] * cell[0] +\
+                        dj[inter_valid_indices, None] * cell[1] +\
                         positions[inter_indj] - positions[inter_indi]
-    inter_dist = np.linalg.norm(inter_disp,axis=1)
+    inter_dist = torch.linalg.norm(inter_disp,axis=1)
 
-    normal_vectors,alpha = get_normal_vect(intra_disp, intra_indi ,intra_indj)
-    ni_dot_d = np.sum( normal_vectors[inter_indi] * inter_disp,axis=1)
-    rhoij =np.sqrt(inter_dist**2- (ni_dot_d)**2)
-    alpha_ij = (alpha[inter_indi] + alpha[inter_indj])/2
+    normal_vectors = get_normal_vect(intra_disp, intra_indi ,intra_indj, len(atoms))
+    normal_vectors = torch.tensor(normal_vectors, dtype=torch.get_default_dtype(), device=inter_disp.device)
+    if inter_dist.numel() == 0:
+        return torch.tensor(0.0, dtype=inter_disp.dtype, device=inter_disp.device), torch.zeros((len(atoms),3), dtype=inter_disp.dtype, device=inter_disp.device)
+
+    ni_dot_d = torch.sum( normal_vectors[inter_indi] * inter_disp,axis=1)
+    rhoij =torch.sqrt(torch.maximum(inter_dist**2- (ni_dot_d)**2, torch.tensor(eps, device=inter_disp.device)))
     
     ni = normal_vectors[inter_indi]
-    nj = normal_vectors[inter_indj]
-    rhat = inter_disp/inter_dist[:,np.newaxis]
-    r_alpha = inter_dist/alpha_ij
+    rhat = inter_disp/inter_dist[:,None]
 
-    S_ij = (np.dot(ni,rhat) * np.dot(nj,rhat))*np.exp(-r_alpha/2)*(-1-r_alpha/2 - r_alpha**2/20 + r_alpha**3/120) +\
-            (np.dot(ni,nj)-np.dot(ni,rhat) * np.dot(nj,rhat))*np.exp(-r_alpha/2)*(1+r_alpha/2 - r_alpha**2/10)
+    descriptors = torch.stack([rhoij, inter_dist], axis=1).requires_grad_(True)
+    output = model.forward(descriptors) #input dim = 2 and output dim = 2
+    
+    x = inter_dist/cutoff
+    Taper =  20*torch.pow(x,7) - 70*torch.pow(x,6) + 84*torch.pow(x,5) - 35*torch.pow(x,4) +1
+    V_ij = torch.exp(-lambda_val*(inter_dist - z0)) * output[:,0] - output[:,1]*torch.pow(inter_dist/z0,-6)
+    V = 0.5 *  torch.sum(V_ij*Taper)
 
-    descriptors = np.stack([S_ij, rhoij, inter_dist], axis=1)
-    #layer 1
-    z1 = np.dot(descriptors, W1) + b1
-    a1 = np.maximum(0, z1) # ReLU activation function
-    
-    # Layer 2 (Output)
-    output = np.dot(a1, W2) + b2 
-    
-    x = dist/cutoff
-    Taper =  20*np.power(x,7) - 70*np.power(x,7) + 84*np.power(x,5) - 35*np.power(x,4) +1
-    V_ij = np.exp(-lambda_val*(inter_dist - z0)) * output[:,0] - output[:,1]*np.power(inter_dist/z0,-6)
-    V = 0.5 *  np.sum(V_ij*Taper)
-    return V
+    #forces 
+    rhat = inter_disp/inter_dist[:,None]
+
+    # Jacobian of outputs w.r.t. descriptors using autograd (vectorized)
+    jac_full = torch.autograd.functional.jacobian(
+        lambda d: model.forward(d),
+        descriptors,
+        vectorize=True,
+        create_graph=True,
+    )  # shape: (B, out_dim, B, in_dim)
+    jac = jac_full.diagonal(dim1=0, dim2=2).permute(2, 0, 1)  # (B, out_dim, in_dim)
+
+    # descriptor derivatives wrt displacement d
+    ni_dot_d = torch.sum(ni * inter_disp, axis=1)
+    drho_dd = (inter_disp - (ni_dot_d[:,None]*ni)) / rhoij[:,None]  # (pairs,3)
+    dr_dd = rhat  # (pairs,3)
+
+    df0_drho = jac[:,0,0]
+    df0_dr   = jac[:,0,1]
+    df1_drho = jac[:,1,0]
+    df1_dr   = jac[:,1,1]
+
+    exp_term = torch.exp(-lambda_val*(inter_dist - z0))
+    power_term = torch.pow(inter_dist/z0,-6)
+    taper_der = (1.0/cutoff)*(140*torch.pow(x,6) - 420*torch.pow(x,5) + 420*torch.pow(x,4) - 140*torch.pow(x,3))
+
+    # dV/dd for each pair
+    term_df0 = exp_term[:,None]*(df0_dr[:,None]*dr_dd + df0_drho[:,None]*drho_dd)
+    term_df1 = power_term[:,None]*(df1_dr[:,None]*dr_dd + df1_drho[:,None]*drho_dd)
+
+    dV_dd = exp_term[:,None]*(-lambda_val*output[:,0][:,None]*dr_dd) + term_df0
+    pow_r7 = torch.pow(inter_dist/z0, -7).unsqueeze(1)  # (pairs,1)
+    dV_dd += 6*output[:,1][:,None]*pow_r7*dr_dd / z0  # derivative of r^-6 term prefactor
+    dV_dd -= term_df1
+
+    # include taper contribution
+    dE_dd = 0.5*(Taper[:,None]*dV_dd + V_ij[:,None]*taper_der[:,None]*dr_dd)
+
+    pair_forces = -dE_dd  # (pairs,3)
+    forces = torch.zeros((len(atoms),3), dtype=pair_forces.dtype, device=pair_forces.device)
+    ai = inter_indi.to(dtype=torch.long, device=pair_forces.device)
+    aj = inter_indj.to(dtype=torch.long, device=pair_forces.device)
+    forces = forces.index_add(0, ai, pair_forces)
+    forces = forces.index_add(0, aj, -pair_forces)
+
+    return V, forces
+
+def Get_interlayer_MLP(model):
+    """Model is an MLP object from MLP.py. Parameters are the parameters of the MLP.
+    input dim = 2 and output dim = 2."""
+    def Interlayer_MLP(atoms,parameters,cutoff=10,**kwargs):
+        """interlayer potential using MLP. outputs of MLP are used to construct interlayer potential and forces of a given system."""
+        model.set_parameters(parameters)
+        z0 = 3.35
+        lambda_val = 3.293
+        eps = 1e-12
+
+        #separate intra and interlayer displacements
+        disp, i, j, di, dj = get_disp(atoms,cutoff=cutoff)
+        atom_types = atoms.get_array("mol-id")
+        cell = atoms.get_cell()
+        positions = atoms.positions
+        intra_valid_indices = atom_types[i] == atom_types[j]
+        intra_indi = i[intra_valid_indices]
+        intra_indj =j[intra_valid_indices]
+        intra_disp = di[intra_valid_indices, np.newaxis] * cell[0] +\
+                        dj[intra_valid_indices, np.newaxis] * cell[1] +\
+                        positions[intra_indj] - positions[intra_indi]
+        inter_valid_indices = atom_types[i] != atom_types[j]
+        inter_indi = i[inter_valid_indices]
+        inter_indj = j[inter_valid_indices]
+        inter_di = di[inter_valid_indices]
+        inter_dj = dj[inter_valid_indices]
+
+        inter_disp = di[inter_valid_indices, np.newaxis] * cell[0] +\
+                            dj[inter_valid_indices, np.newaxis] * cell[1] +\
+                            positions[inter_indj] - positions[inter_indi]
+        inter_dist = np.linalg.norm(inter_disp,axis=1)
+
+        normal_vectors = get_normal_vect(intra_disp, intra_indi ,intra_indj, len(atoms))
+        if inter_dist.size == 0:
+            return 0.0, np.zeros((len(atoms),3))
+
+        ni_dot_d = np.sum( normal_vectors[inter_indi] * inter_disp,axis=1)
+        rhoij =np.sqrt(np.maximum(inter_dist**2- (ni_dot_d)**2, eps))
+        
+        ni = normal_vectors[inter_indi]
+        nj = normal_vectors[inter_indj]
+        rhat = inter_disp/inter_dist[:,np.newaxis]
+
+        descriptors = np.stack([rhoij, inter_dist], axis=1)
+        output = model.forward(descriptors) #input dim = 2 and output dim = 2
+        
+        x = inter_dist/cutoff
+        Taper =  20*np.power(x,7) - 70*np.power(x,6) + 84*np.power(x,5) - 35*np.power(x,4) +1
+        V_ij = np.exp(-lambda_val*(inter_dist - z0)) * output[:,0] - output[:,1]*np.power(inter_dist/z0,-6)
+        V = 0.5 *  np.sum(V_ij*Taper)
+
+        #forces 
+        rhat = inter_disp/inter_dist[:,np.newaxis]
+        jac = model.backward(descriptors)  # shape (pairs, 2 outputs, 2 descriptors)
+
+        # descriptor derivatives wrt displacement d
+        ni_dot_d = np.sum(ni * inter_disp, axis=1)
+        drho_dd = (inter_disp - (ni_dot_d[:,None]*ni)) / rhoij[:,None]  # (pairs,3)
+        dr_dd = rhat  # (pairs,3)
+
+        df0_drho = jac[:,0,0]
+        df0_dr   = jac[:,0,1]
+        df1_drho = jac[:,1,0]
+        df1_dr   = jac[:,1,1]
+
+        exp_term = np.exp(-lambda_val*(inter_dist - z0))
+        power_term = np.power(inter_dist/z0,-6)
+        taper_der = (1.0/cutoff)*(140*np.power(x,6) - 420*np.power(x,5) + 420*np.power(x,4) - 140*np.power(x,3))
+
+        # dV/dd for each pair
+        term_df0 = exp_term[:,None]*(df0_dr[:,None]*dr_dd + df0_drho[:,None]*drho_dd)
+        term_df1 = power_term[:,None]*(df1_dr[:,None]*dr_dd + df1_drho[:,None]*drho_dd)
+
+        dV_dd = exp_term[:,None]*(-lambda_val*output[:,0][:,None]*dr_dd) + term_df0
+        pow_r7 = np.power(inter_dist/z0, -7)[:,None]
+        dV_dd += 6*output[:,1][:,None]*pow_r7*dr_dd / z0  # derivative of r^-6 term prefactor
+        dV_dd -= term_df1
+
+        # include taper contribution
+        dE_dd = 0.5*(Taper[:,None]*dV_dd + V_ij[:,None]*taper_der[:,None]*dr_dd)
+
+        forces = np.zeros((len(atoms),3))
+        pair_forces = -dE_dd  # (pairs,3)
+        np.add.at(forces, inter_indi, pair_forces)
+        np.add.at(forces, inter_indj, -pair_forces)
+
+        return V, forces
+    return Interlayer_MLP
 
 if __name__ == "__main__":
     import flatgraphene as fg
     import matplotlib.pyplot as plt
     from pythtb import *
-    from bilayer_letb.api import tb_model
+    from BLG_model_builder.MLP import *
     from BLG_model_builder.geom_tools import *
     from BLG_model_builder.Lammps_Utils import *
     import pandas as pd
-    potential_forces_test=  True
+    potential_forces_test=  False
     potential_test = False
+    interlayer_mlp_test = True
 
     if potential_forces_test:
         h=1e-5
@@ -428,10 +572,15 @@ if __name__ == "__main__":
         print(fd_forces_kc)
         print(kc_vdw_forces)
 
+    if interlayer_mlp_test:
+        model = MLP(input_dim=2, hidden_dim=15, output_dim=2, num_layers=2)
+        atoms = get_bilayer_atoms(3.35,0)
+        V, forces = Interlayer_MLP_torch(atoms,model)
+        print("V = ",V)
+        print("forces = ",forces)
+
 
     if potential_test:
-
-
         sep = 3.35
         a = 2.46
         n=5
