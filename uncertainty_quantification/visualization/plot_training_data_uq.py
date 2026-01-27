@@ -16,7 +16,7 @@ if __name__ == "__main__":
     plot_model_name = ["Classical_energy_interlayer","Classical_energy_intralayer",
                         "TETB_energy_interlayer_popov","TETB_energy_intralayer_popov",
                         "MK","intralayer_LETB_NN_val_1","intralayer_LETB_NN_val_2","intralayer_LETB_NN_val_3","interlayer_LETB","MLP_SK"]
-    plot_model_name = ["MLP_SK"]
+    plot_model_name = ["MLP_SK","MK"]
 
     opt_ensemble = {"mcmc":{"Classical_energy_interlayer":"ensembles/Classical_energy_interlayer/Classical_energy_interlayer_ensemble_T_2.0.pkl",
                     "Classical_energy_intralayer":"ensembles/Classical_energy_intralayer/Classical_energy_intralayer_ensemble_T_10.0.pkl",

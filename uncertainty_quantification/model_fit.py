@@ -19,14 +19,33 @@ from BLG_model_builder.geom_tools import *
 from BLG_model_builder.TETB_model_builder import *
 from BLG_model_builder.BLG_model_library import *
 
-def fit_torch_mlp(function,model,xdata,ydata,ypred_shift=None,num_epochs=1000, learning_rate=0.001):
-    x, y = torch.tensor(xdata,dtype=torch.float32), torch.tensor(ydata,dtype=torch.float32)
-    if ypred_shift is None:
-        ypred_shift = torch.zeros_like(y,dtype=torch.float32)
+def fit_torch_mlp(function,model,xdata,ydata,ypred_shift=None,num_epochs=1000, learning_rate=0.001,batch_size=64):
+    """
+    Train a torch MLP. Supports xdata as a numpy array/tensor or as a list of ase.Atoms.
+    If xdata is a list, len(xdata) must equal len(ydata); batching is done over indices.
+    """
+    is_atoms_list = isinstance(xdata, list)
+
+    if is_atoms_list:
+        assert len(xdata) == len(ydata), "xdata and ydata must have same length"
+        y = torch.tensor(ydata, dtype=torch.float32)
+        ypred_shift = torch.zeros_like(y) if ypred_shift is None else torch.tensor(ypred_shift, dtype=torch.float32)
+
+        indices = list(range(len(xdata)))
+
+        def collate_fn(batch_indices):
+            atoms_batch = [xdata[idx] for idx in batch_indices]
+            y_batch = y[batch_indices]
+            ypred_shift_batch = ypred_shift[batch_indices]
+            return atoms_batch, y_batch, ypred_shift_batch
+
+        train_loader = DataLoader(indices, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
     else:
-        ypred_shift = torch.tensor(ypred_shift,dtype=torch.float32)
-    dataset = TensorDataset(x, y, ypred_shift)
-    train_loader = DataLoader(dataset, batch_size=64, shuffle=True)
+        x = torch.tensor(xdata, dtype=torch.float32)
+        y = torch.tensor(ydata, dtype=torch.float32)
+        ypred_shift = torch.zeros_like(y) if ypred_shift is None else torch.tensor(ypred_shift, dtype=torch.float32)
+        dataset = TensorDataset(x, y, ypred_shift)
+        train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     
     criterion = nn.MSELoss()  # Mean squared error for hopping values
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -37,8 +56,18 @@ def fit_torch_mlp(function,model,xdata,ydata,ypred_shift=None,num_epochs=1000, l
     for epoch in range(num_epochs):
         epoch_loss = 0.0
         for x_batch, y_batch, ypred_shift_batch in train_loader:
-            # Forward pass: some function of the MLP and the input data
-            pred = function(x_batch, model) + ypred_shift_batch
+            if is_atoms_list:
+                preds = []
+                for atoms_obj in x_batch:
+                    pred_i = function(atoms_obj, model)
+                    if not torch.is_tensor(pred_i):
+                        pred_i = torch.tensor(pred_i, dtype=y_batch.dtype)
+                    preds.append(pred_i)
+                pred = torch.stack(preds).squeeze()
+            else:
+                pred = function(x_batch, model)
+
+            pred = pred + ypred_shift_batch
             
             # Compute loss on hopping values
             loss = criterion(pred, y_batch)
@@ -54,13 +83,25 @@ def fit_torch_mlp(function,model,xdata,ydata,ypred_shift=None,num_epochs=1000, l
             avg_loss = epoch_loss / len(train_loader)
             print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.6f}')
 
-    ypred_bestfit = function(x, model) + ypred_shift
+    if is_atoms_list:
+        preds = []
+        for atoms_obj, shift in zip(xdata, ypred_shift):
+            pred_i = function(atoms_obj, model)
+            if not torch.is_tensor(pred_i):
+                pred_i = torch.tensor(pred_i, dtype=y.dtype)
+            preds.append(pred_i + shift)
+        ypred_bestfit = torch.stack(preds).squeeze()
+    else:
+        ypred_bestfit = function(x, model) + ypred_shift
     flat_list = []
     params = dict(model.named_parameters())
-    for i in [0, 2, 4]:
-        weight_key = f'mlp.{i}.weight'
-        bias_key = f'mlp.{i}.bias'
-        w = params[weight_key].detach().cpu().numpy().T
+
+    # Collect all Linear layers in the Sequential in order to match MLP_numpy
+    linear_indices = [i for i, layer in enumerate(model.mlp) if isinstance(layer, nn.Linear)]
+    for idx in linear_indices:
+        weight_key = f'mlp.{idx}.weight'
+        bias_key = f'mlp.{idx}.bias'
+        w = params[weight_key].detach().cpu().numpy().T  # transpose to (in_features, out_features)
         flat_list.append(w.ravel())
         b = params[bias_key].detach().cpu().numpy().ravel()
         flat_list.append(b)
