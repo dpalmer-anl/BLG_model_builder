@@ -1,0 +1,104 @@
+LAMMPS (19 Nov 2024 - Development - patch_2Jun2022-11538-g800a5f6310-modified)
+OMP_NUM_THREADS environment is not set. Defaulting to 1 thread. (src/comm.cpp:99)
+  using 1 OpenMP thread(s) per MPI task
+# Demonstrate fitpod for POD potential for Si
+
+units metal
+fitpod C_param.pod C_data.pod C_coefficients.pod
+**************** Begin of POD Potentials ****************
+species: C 
+periodic boundary conditions: 1 1 1
+number of environment clusters: 1
+number of principal compoments: 1
+inner cut-off radius: 1
+outer cut-off radius: 5
+bessel polynomial degree: 4
+inverse polynomial degree: 8
+one-body potential: 1
+two-body radial basis functions: 10
+three-body radial basis functions: 8
+three-body angular degree: 4
+four-body radial basis functions: 6
+four-body angular degree: 3
+five-body radial basis functions: 4
+five-body angular degree: 3
+six-body radial basis functions: 3
+six-body angular degree: 2
+seven-body radial basis functions: 2
+seven-body angular degree: 2
+number of local descriptors per element for one-body potential: 1
+number of local descriptors per element for two-body potential: 10
+number of local descriptors per element for three-body potential: 40
+number of local descriptors per element for four-body potential: 42
+number of local descriptors per element for five-body potential: 52
+number of local descriptors per element for six-body potential: 26
+number of local descriptors per element for seven-body potential: 13
+number of local descriptors per element for all potentials: 184
+number of global descriptors: 184
+**************** End of POD Potentials ****************
+
+**************** Begin of Model Coefficients ****************
+total number of coefficients for POD potential: 184
+total number of elements for PCA projection matrix: 0
+total number of elements for PCA centroids: 0
+**************** End of Model Coefficients ****************
+
+**************** Begin of Data File ****************
+file format: extxyz
+file extension: xyz
+path to training data set: ../data/TrainingData/
+path to test data set: ../data/TestData/
+path to environment configuration set: 
+basename for output files: C
+training fraction: 1
+test fraction: 1
+randomize training data set: 1
+randomize test data set: 1
+error analysis for training data set: 1
+error analysis for test data set: 0
+energy/force calculation for training data set: 0
+energy/force calculation for test data set: 0
+fitting weight for energy: 100
+fitting weight for force: 1
+fitting weight for stress: 0
+save pod descriptors: 0
+compute pod descriptors: 0
+**************** End of Data File ****************
+**************** Begin of Training Data Set ****************
+-----------------------------------------------------------------------------------
+               data file               | number of configurations | number of atoms
+-----------------------------------------------------------------------------------
+ strained_bilayer_graphene_rVV10.xyz   |               426        |        1704
+ strained_monolayer_graphene_rVV10.xyz |                65        |         130
+-----------------------------------------------------------------------------------
+number of files: 2
+number of configurations in all files: 491
+number of atoms in all files: 1834
+minimum number of atoms: 2
+maximum number of atoms: 4
+**************** End of Training Data Set ****************
+**************** Begin of Memory Allocation ****************
+maximum number of atoms in periodic domain: 4
+maximum number of atoms in extended domain: 588
+maximum number of neighbors in extended domain: 2352
+size of double memory: 123648
+size of descriptor matrix: 184 x 184
+**************** End of Memory Allocation ****************
+**************** Begin of Error Calculation ****************
+Configuration: # 1
+Configuration: # 101
+Configuration: # 201
+Configuration: # 301
+Configuration: # 401
+**************** End of Error Calculation ****************
+**************** Begin of Error Analysis for the Training Data Set ****************
+-----------------------------------------------------------------------------------------------------------------------
+                  File                   | # configs |  # atoms  | MAE energy  | RMSE energy | MAE force  | RMSE force
+-----------------------------------------------------------------------------------------------------------------------
+strained_bilayer_graphene_rVV10.xyz            426        1704     0.000434      0.000686      0.007076      0.014769  
+strained_monolayer_graphene_rVV10.xyz           65         130     0.001381      0.001688      0.008583      0.013168  
+-----------------------------------------------------------------------------------------------------------------------
+All files                                      491        1834     0.000560      0.000886      0.007183      0.014661  
+-----------------------------------------------------------------------------------------------------------------------
+**************** End of Error Analysis for the Training Data Set ****************
+Total wall time: 0:00:00

@@ -1,0 +1,25 @@
+# use_pod_models_hash.txt — POD_index is 0-based line index (comments skipped)
+# Selected: best test RMSE + 9 random (seed=42, ncoeff>50)
+# index  hash  ncoeff  test_rmse_eV_per_atom
+# 0  09fdb1c2b98eb30e  ncoeff=53  rmse=0.00267812
+# 1  e5aa13cf8af6707f  ncoeff=97  rmse=0.00685244
+# 2  16d17eb35e60b296  ncoeff=51  rmse=0.00401786
+# 3  6cb38c0d6180272c  ncoeff=73  rmse=0.00513164
+# 4  e1a7bb04e39ffd6c  ncoeff=65  rmse=0.00588479
+# 5  cf2bf192ec4363a5  ncoeff=103  rmse=0.0071073
+# 6  b4df8c81b083ad2d  ncoeff=51  rmse=0.00825461
+# 7  c13280467cd94612  ncoeff=103  rmse=0.00827115
+# 8  d7fa52ee6726c031  ncoeff=63  rmse=0.00948658
+# 9  644e1a68b4a900a3  ncoeff=97  rmse=0.0126063
+# 10  5bd63334e303b3a9  ncoeff=99  rmse=0.0153293
+09fdb1c2b98eb30e
+e5aa13cf8af6707f
+16d17eb35e60b296
+6cb38c0d6180272c
+e1a7bb04e39ffd6c
+cf2bf192ec4363a5
+b4df8c81b083ad2d
+c13280467cd94612
+d7fa52ee6726c031
+644e1a68b4a900a3
+5bd63334e303b3a9

@@ -1,0 +1,4 @@
+# Demonstrate fitpod for POD potential for Si
+
+units metal
+fitpod C_param.pod C_data.pod C_coefficients.pod
