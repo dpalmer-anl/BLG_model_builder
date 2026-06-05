@@ -14,8 +14,8 @@ import pandas as pd
 import glob
 import h5py
 from ase.calculators.singlepoint import SinglePointCalculator
-from blg_model_builder_v2.tb_descriptors import *
-from blg_model_builder_v2.geom_tools import *
+from blg_model_builder.tb_descriptors import *
+from blg_model_builder.geom_tools import *
 # precompute_pod_descriptors depended on the C++ potential_ext extension (removed).
 # It is no longer available.  The MCMC loop now uses PODLammpsCalculator.evaluate_batch.
 

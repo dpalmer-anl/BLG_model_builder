@@ -42,7 +42,7 @@ except ImportError:
 
 from scipy.interpolate import CubicSpline
 
-from blg_model_builder_v2.geom_tools import get_aa_bilayer_atoms, get_bilayer_atoms
+from blg_model_builder.geom_tools import get_aa_bilayer_atoms, get_bilayer_atoms
 
 _TESTS_DIR = Path(__file__).resolve().parent
 if str(_TESTS_DIR) not in sys.path:

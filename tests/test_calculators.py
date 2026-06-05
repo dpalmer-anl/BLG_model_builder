@@ -69,7 +69,7 @@ class TestTersoffASECalculator:
     """TersoffASECalculator backed by LAMMPS Python module"""
 
     def test_basic_compute(self):
-        from blg_model_builder_v2.potentials import TersoffASECalculator
+        from blg_model_builder.potentials import TersoffASECalculator
         atoms = bulk("C", crystalstructure="diamond", a=3.567, cubic=True)
         calc = TersoffASECalculator(_tersoff_params())
         energy = calc.get_potential_energy(atoms)
@@ -83,7 +83,7 @@ class TestKolmogorovCrespiASECalculator:
     """KolmogorovCrespiASECalculator backed by LAMMPS Python module"""
 
     def test_basic_compute(self):
-        from blg_model_builder_v2.potentials import KolmogorovCrespiASECalculator
+        from blg_model_builder.potentials import KolmogorovCrespiASECalculator
         atoms, layers = _graphene_bilayer_ase(nx=7, ny=7)
         N = len(atoms)
         calc = KolmogorovCrespiASECalculator(_kc_params(), layer_tags=layers.tolist())
@@ -98,7 +98,7 @@ class TestDRIPASECalculator:
     """DRIPASECalculator backed by LAMMPS Python module"""
 
     def test_basic_compute(self):
-        from blg_model_builder_v2.potentials import DRIPASECalculator
+        from blg_model_builder.potentials import DRIPASECalculator
         atoms, layers = _graphene_bilayer_ase(nx=3, ny=3)
         N = len(atoms)
         params = _drip_params()[:8]  # eight fitted params; B, eta fixed in class
@@ -132,7 +132,7 @@ class TestPODASECalculator:
         }
 
     def test_basic_compute(self, si_hyperparams):
-        from blg_model_builder_v2.potentials import PODASECalculator, ncoeff_from_params
+        from blg_model_builder.potentials import PODASECalculator, ncoeff_from_params
         hp = dict(si_hyperparams, species=["Si"])
         nc = ncoeff_from_params(hp)
         coeffs = np.zeros(nc)

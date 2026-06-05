@@ -23,7 +23,7 @@ def _ensure_importable_package() -> None:
     Only fall back to the repo `src/` layout if import fails.
     """
     try:
-        import blg_model_builder_v2  # noqa: F401
+        import blg_model_builder  # noqa: F401
         return
     except Exception:
         pass
@@ -36,14 +36,14 @@ def _ensure_importable_package() -> None:
 
     # If still not importable, create a minimal namespace package pointing at src/.
     try:
-        import blg_model_builder_v2  # noqa: F401
+        import blg_model_builder  # noqa: F401
         return
     except Exception:
         import types
 
-        pkg = types.ModuleType("blg_model_builder_v2")
+        pkg = types.ModuleType("blg_model_builder")
         pkg.__path__ = [str(src)]  # type: ignore[attr-defined]
-        sys.modules["blg_model_builder_v2"] = pkg
+        sys.modules["blg_model_builder"] = pkg
 
 
 _ensure_importable_package()
@@ -59,8 +59,8 @@ except Exception as exc:  # pragma: no cover
         f"Original error: {type(exc).__name__}: {exc}"
     ) from exc
 
-from blg_model_builder_v2.geom_tools import get_bilayer_atoms
-from blg_model_builder_v2.potentials import (
+from blg_model_builder.geom_tools import get_bilayer_atoms
+from blg_model_builder.potentials import (
     DRIPASECalculator,
     PODASECalculator,
     TersoffDRIPASECalculator,
@@ -241,8 +241,8 @@ def _fit_and_save_pod_energy_params(hyperparams: dict, save_path: Path) -> np.nd
         if str(uq_dir) not in sys.path:
             sys.path.insert(0, str(uq_dir))
 
-        from blg_model_builder_v2.potentials import pod_hyperparams_to_str  # type: ignore
-        from blg_model_builder_v2.DataLoader import load_data_for_model  # type: ignore
+        from blg_model_builder.potentials import pod_hyperparams_to_str  # type: ignore
+        from blg_model_builder.DataLoader import load_data_for_model  # type: ignore
         from model_fit import fit_pod  # type: ignore
 
         xdata_tr, _, _, _, _, _ = load_data_for_model("POD_energy", supercells=1)

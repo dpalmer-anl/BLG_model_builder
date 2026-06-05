@@ -22,7 +22,7 @@ import sys
 import traceback
 import numpy as np
 
-from blg_model_builder_v2.potentials import (
+from blg_model_builder.potentials import (
     PODASECalculator,
     ncoeff_from_params,
 )

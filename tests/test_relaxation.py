@@ -64,8 +64,8 @@ try:
 except ImportError:
     plt = None
 
-from blg_model_builder_v2.geom_tools import get_bilayer_atoms
-from blg_model_builder_v2.potentials import (
+from blg_model_builder.geom_tools import get_bilayer_atoms
+from blg_model_builder.potentials import (
     PODASECalculator,
     TETB_PODASECalculator,
     TersoffKolmogorovCrespiASECalculator,

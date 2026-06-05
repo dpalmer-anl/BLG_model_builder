@@ -483,7 +483,7 @@ def _relax_structure_ase(
 #  Install: build LAMMPS with ``make install-python``  (or cmake equivalent).
 # ═════════════════════════════════════════════════════════════════════════════
 
-from blg_model_builder_v2.lammps_interface import (  # noqa: E402
+from blg_model_builder.lammps_interface import (  # noqa: E402
     LammpsCalculatorBase,
     TersoffLammpsCalculator,
     KolmogorovCrespiLammpsCalculator,

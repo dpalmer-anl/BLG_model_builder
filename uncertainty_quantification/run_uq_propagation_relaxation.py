@@ -37,7 +37,7 @@ from typing import Tuple
 
 import numpy as np
 
-from plot_bayes_factor import (
+from blg_model_builder.ensemble_io import (
     DEFAULT_CALIBRATION_METRICS_DIR,
     expand_model_patterns,
     load_ensemble_pickle,

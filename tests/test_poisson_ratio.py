@@ -18,7 +18,7 @@ bilayer graphene, for every calculator in ``MODEL_KEYS``.
   fit :math:`E = E_0 + \\tfrac12 C_{11}\\epsilon_1^2 + C_{12}\\epsilon_1\\epsilon_2
   + \\tfrac12 C_{22}\\epsilon_2^2` and set :math:`\\nu_\\text{in} = C_{12} / C_{11}` (symmetric hex, :math:`C_{11} \\approx C_{22}`).
 
-All bilayer cells are built with :mod:`blg_model_builder_v2.geom_tools` (unstrained
+All bilayer cells are built with :mod:`blg_model_builder.geom_tools` (unstrained
 reference, then in-plane cell strains via fixed reduced coordinates).
 
 **Hyperparameters** and ``MODEL_KEYS`` are imported from :mod:`test_relaxation` so
@@ -53,13 +53,13 @@ except ImportError:
     plt = None
 
 # Import calculators so ``Atoms`` gets ``relax_structure`` patches (same as other tests).
-from blg_model_builder_v2.potentials import (  # noqa: F401 — side effect: patch ``Atoms.relax_structure``
+from blg_model_builder.potentials import (  # noqa: F401 — side effect: patch ``Atoms.relax_structure``
     PODASECalculator,
     TETB_PODASECalculator,
     TersoffKolmogorovCrespiASECalculator,
 )
 
-from blg_model_builder_v2.geom_tools import get_aa_bilayer_atoms, get_bilayer_atoms
+from blg_model_builder.geom_tools import get_aa_bilayer_atoms, get_bilayer_atoms
 
 # ---------------------------------------------------------------------------
 # Hyperparameters — single source of truth in ``test_relaxation.py``

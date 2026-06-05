@@ -14,9 +14,9 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 
-from blg_model_builder_v2.DataLoader import load_data_for_model
-from blg_model_builder_v2.tb_models import get_acsf_hoppings
-from model_fit import fit_acsf_linear_hopping, get_prediction
+from blg_model_builder.DataLoader import load_data_for_model
+from blg_model_builder.tb_models import get_acsf_hoppings
+from blg_model_builder.model_fit import fit_acsf_linear_hopping, get_prediction
 
 
 def mean_absolute_error_lists(y_pred, y_true) -> float:

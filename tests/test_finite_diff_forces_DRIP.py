@@ -16,7 +16,7 @@ import numpy as np
 def _ensure_importable_package() -> None:
     """Prefer installed package; fallback to repo `src/` only if needed."""
     try:
-        import blg_model_builder_v2  # noqa: F401
+        import blg_model_builder  # noqa: F401
         return
     except Exception:
         pass
@@ -28,14 +28,14 @@ def _ensure_importable_package() -> None:
             sys.path.insert(0, p)
 
     try:
-        import blg_model_builder_v2  # noqa: F401
+        import blg_model_builder  # noqa: F401
         return
     except Exception:
         import types
 
-        pkg = types.ModuleType("blg_model_builder_v2")
+        pkg = types.ModuleType("blg_model_builder")
         pkg.__path__ = [str(src)]  # type: ignore[attr-defined]
-        sys.modules["blg_model_builder_v2"] = pkg
+        sys.modules["blg_model_builder"] = pkg
 
 
 _ensure_importable_package()
@@ -49,8 +49,8 @@ if str(_TESTS_DIR) not in sys.path:
 import pytest
 pytest.importorskip("lammps")
 
-from blg_model_builder_v2.geom_tools import get_bilayer_atoms
-from blg_model_builder_v2.potentials import TersoffDRIPASECalculator
+from blg_model_builder.geom_tools import get_bilayer_atoms
+from blg_model_builder.potentials import TersoffDRIPASECalculator
 
 from physical_properties_harness import (
     layer_tags_from_mol_id,

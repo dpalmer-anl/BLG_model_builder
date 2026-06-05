@@ -47,18 +47,14 @@ import matplotlib.pyplot as plt
 from ase import Atoms
 
 # Local imports (same package)
-from plot_bayes_factor import (
+from blg_model_builder.ensemble_io import (
     DEFAULT_CALIBRATION_METRICS_DIR,
     expand_model_patterns,
     load_ensemble_pickle,
     resolve_ensemble_pickle,
 )
-from plot_poisson_ratio import (
-    LAT_CON,
-    STRAIN_RANGE,
-    load_strained_data,
-    print_summary,
-)
+from blg_model_builder.strain_data import LAT_CON, STRAIN_RANGE, load_strained_data
+from visualizations.plot_poisson_ratio import print_summary
 
 from uq_model_runtime import (
     apply_uq_parameters,
@@ -110,7 +106,7 @@ def _apply_biaxial_inplane_strain(base: Atoms, eps1: float, eps2: float) -> Atom
 
 
 def _bilayer_builder(stacking: str) -> Callable[[float, float, float], Atoms]:
-    from blg_model_builder_v2.geom_tools import get_aa_bilayer_atoms, get_bilayer_atoms
+    from blg_model_builder.geom_tools import get_aa_bilayer_atoms, get_bilayer_atoms
 
     def build(d: float, eps1: float = 0.0, eps2: float = 0.0) -> Atoms:
         if stacking == "AB":
@@ -146,7 +142,7 @@ def _poly_derivative_at_zero(x: np.ndarray, y: np.ndarray, degree: int = DEFAULT
 
 def poisson_nu_xz_poly(dx_g: np.ndarray, sep_g: np.ndarray, E_xz: np.ndarray, sep0: float, degree: int) -> Tuple[float, np.ndarray, np.ndarray]:
     """Like :func:`plot_poisson_ratio.poisson_nu_xz` but ν = −dε_z/dε_x|₀ from a polynomial."""
-    from plot_poisson_ratio import _parabolic_min
+    from blg_model_builder.strain_data import parabolic_min as _parabolic_min
 
     sep_star = np.array([
         _parabolic_min(sep_g, E_xz[i, :], int(np.argmin(E_xz[i, :])))
@@ -158,7 +154,7 @@ def poisson_nu_xz_poly(dx_g: np.ndarray, sep_g: np.ndarray, E_xz: np.ndarray, se
 
 
 def poisson_nu_yz_poly(dy_g: np.ndarray, sep_g: np.ndarray, E_yz: np.ndarray, sep0: float, degree: int) -> Tuple[float, np.ndarray, np.ndarray]:
-    from plot_poisson_ratio import _parabolic_min
+    from blg_model_builder.strain_data import parabolic_min as _parabolic_min
 
     sep_star = np.array([
         _parabolic_min(sep_g, E_yz[j, :], int(np.argmin(E_yz[j, :])))
@@ -170,7 +166,7 @@ def poisson_nu_yz_poly(dy_g: np.ndarray, sep_g: np.ndarray, E_yz: np.ndarray, se
 
 
 def poisson_nu_xy_poly(dx_g: np.ndarray, dy_g: np.ndarray, E_xy: np.ndarray, degree: int) -> Tuple[float, np.ndarray]:
-    from plot_poisson_ratio import _parabolic_min
+    from blg_model_builder.strain_data import parabolic_min as _parabolic_min
 
     dy_star = np.array([
         _parabolic_min(dy_g, E_xy[i, :], int(np.argmin(E_xy[i, :])))

@@ -30,7 +30,7 @@ Calling ``evaluate_batch`` once for each unit-vector k = 0..n_desc-1
 builds the full Jacobian matrix analytically in n_desc batch passes,
 each processing all structures simultaneously.
 
-Design mirrors ``blg_model_builder_v2.lammps_interface``.
+Design mirrors ``blg_model_builder.lammps_interface``.
 """
 
 import sys
@@ -44,7 +44,7 @@ _SRC  = os.path.join(_HERE, "..", "src")
 if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
-from blg_model_builder_v2.potentials import ncoeff_from_params
+from blg_model_builder.potentials import ncoeff_from_params
 
 
 class PODDescriptorCalculator:
@@ -83,9 +83,9 @@ class PODDescriptorCalculator:
         self._n_desc: int = ncoeff_from_params(hp_with_species)
 
         # Deferred import: avoids the circular import cycle between
-        # blg_model_builder_v2.lammps_interface and blg_model_builder_v2.potentials
+        # blg_model_builder.lammps_interface and blg_model_builder.potentials
         # (same pattern as pod_hyperparameter_search.py in the parent package).
-        from blg_model_builder_v2.lammps_interface import PODLammpsCalculator  # noqa: PLC0415
+        from blg_model_builder.lammps_interface import PODLammpsCalculator  # noqa: PLC0415
 
         # Internal PODLammpsCalculator: coefficients will be overwritten per call
         self._calc = PODLammpsCalculator(

@@ -91,9 +91,9 @@ else:
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-import blg_model_builder_v2  # noqa: F401 — already installed
-from blg_model_builder_v2.tb_models import get_acsf_hoppings_sk, get_acsf_hoppings
-from blg_model_builder_v2.tb_descriptors import (
+import blg_model_builder  # noqa: F401 — already installed
+from blg_model_builder.tb_models import create_tb_model
+from blg_model_builder.tb_descriptors import (
     get_acsf_hopping_descriptors,
     get_acsf_sk_hopping_descriptors,
 )
@@ -114,7 +114,7 @@ DEFAULT_ENSEMBLE_SHUFFLE_SEED: int = 0
 
 
 # ---------------------------------------------------------------------------
-# Inlined TB utilities from blg_model_builder_v2.tb_models
+# Inlined TB utilities from blg_model_builder.tb_models
 #
 # tb_models.py unconditionally imports torch (and optionally cupy /
 # matplotlib) at module level, none of which are required by the three
@@ -249,7 +249,7 @@ def _resolve_tb_ensemble(
     ``miscalibration_area`` is selected automatically (same logic as the POD
     ensemble temperature auto-select).
     """
-    from plot_bayes_factor import resolve_ensemble_pickle  # lazy import
+    from blg_model_builder.ensemble_io import resolve_ensemble_pickle  # lazy import
     _, _, canonical = _parse_tb_model_name(tb_model_name)
     return resolve_ensemble_pickle(
         canonical,
@@ -360,11 +360,10 @@ def _build_bands(
         )
     # pair_v : (n_pairs, 3) — Cartesian bond vectors in Å (with lattice offsets)
 
-    # --- Step 2: hopping amplitudes ---
-    if is_sk:
-        hoppings = get_acsf_hoppings_sk(descriptors, params)
-    else:
-        hoppings = get_acsf_hoppings(descriptors, params)  # (n_pairs,) real
+    # --- Step 2: hopping amplitudes (class-based TB model) ---
+    tb_name = f"ACSF_hoppings_sk_M_{M}_W_{W}" if is_sk else f"ACSF_hoppings_M_{M}_W_{W}"
+    tb_model = create_tb_model(tb_name, {"M": M, "W": W, "r_cut": r_cut})
+    hoppings = tb_model(descriptors, params)
 
     N = len(atoms)
     nocc = N // 2
@@ -580,7 +579,7 @@ def main() -> None:
     # Lazy imports of local modules (may pull in matplotlib / ase which are
     # not present in every env — defer until after arg parsing).
     # -----------------------------------------------------------------------
-    from plot_bayes_factor import (
+    from blg_model_builder.ensemble_io import (
         DEFAULT_CALIBRATION_METRICS_DIR as _PBF_CALIB_DIR,
         expand_model_patterns,
         load_ensemble_pickle,

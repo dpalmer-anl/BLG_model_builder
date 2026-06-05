@@ -21,9 +21,9 @@ from typing import Any, Dict
 import matplotlib.pyplot as plt
 import numpy as np
 
-from blg_model_builder_v2.DataLoader import load_data_for_model
-from blg_model_builder_v2.potentials import PODASECalculator, pod_hyperparams_to_str
-from model_fit import fit_pod
+from blg_model_builder.DataLoader import load_data_for_model
+from blg_model_builder.potentials import PODASECalculator, pod_hyperparams_to_str
+from blg_model_builder.model_fit import fit_pod
 
 
 # Identical template to ``get_MCMC_inputs.py`` / ``POD_energy`` (lines 238–245).

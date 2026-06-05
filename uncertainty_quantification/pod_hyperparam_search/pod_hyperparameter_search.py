@@ -3,11 +3,11 @@
 
 Grid search over POD descriptor hyperparameters for either:
 
-* ``POD_energy`` — standalone :class:`~blg_model_builder_v2.lammps_interface.PODLammpsCalculator`
+* ``POD_energy`` — standalone :class:`~blg_model_builder.lammps_interface.PODLammpsCalculator`
   (LAMMPS ``fitpod`` on DFT totals), or
 * ``TETB_POD`` — residual POD on top of TB + Ewald via
   :func:`model_fit.fit_tetb_residual_pod` /
-  :class:`~blg_model_builder_v2.lammps_interface.TETB_PODLammpsCalculator`
+  :class:`~blg_model_builder.lammps_interface.TETB_PODLammpsCalculator`
   (same POD grid and fit weights as the standalone path).
 
 Toggle :data:`SEARCH_MODEL` at the top of this file.  For each candidate:
@@ -207,19 +207,19 @@ def _load_existing_results_for_resume() -> tuple[list[dict], Path, Optional[Path
 # Importing lammps_interface here at top level would trigger that cycle.
 # We therefore defer PODLammpsCalculator to a lazy getter used inside functions.
 
-from blg_model_builder_v2.DataLoader import load_data_for_model  # noqa: E402
-from blg_model_builder_v2.potentials import ncoeff_from_params, pod_hyperparams_to_str  # noqa: E402
-from model_fit import fit_pod, fit_tetb_residual_pod  # noqa: E402
+from blg_model_builder.DataLoader import load_data_for_model  # noqa: E402
+from blg_model_builder.potentials import ncoeff_from_params, pod_hyperparams_to_str  # noqa: E402
+from blg_model_builder.model_fit import fit_pod, fit_tetb_residual_pod  # noqa: E402
 
 
 def _get_pod_calculator_class():
     """Lazily import PODLammpsCalculator to avoid the circular import cycle."""
-    from blg_model_builder_v2.lammps_interface import PODLammpsCalculator  # noqa: PLC0415
+    from blg_model_builder.lammps_interface import PODLammpsCalculator  # noqa: PLC0415
     return PODLammpsCalculator
 
 
 def _get_tetb_pod_calculator_class():
-    from blg_model_builder_v2.lammps_interface import TETB_PODLammpsCalculator  # noqa: PLC0415
+    from blg_model_builder.lammps_interface import TETB_PODLammpsCalculator  # noqa: PLC0415
     return TETB_PODLammpsCalculator
 
 

@@ -23,7 +23,7 @@ import pytest
 def _ensure_importable_package() -> None:
     """Prefer installed package; fallback to repo `src/` only if needed."""
     try:
-        import blg_model_builder_v2  # noqa: F401
+        import blg_model_builder  # noqa: F401
         return
     except Exception:
         pass
@@ -35,14 +35,14 @@ def _ensure_importable_package() -> None:
             sys.path.insert(0, p)
 
     try:
-        import blg_model_builder_v2  # noqa: F401
+        import blg_model_builder  # noqa: F401
         return
     except Exception:
         import types
 
-        pkg = types.ModuleType("blg_model_builder_v2")
+        pkg = types.ModuleType("blg_model_builder")
         pkg.__path__ = [str(src)]  # type: ignore[attr-defined]
-        sys.modules["blg_model_builder_v2"] = pkg
+        sys.modules["blg_model_builder"] = pkg
 
 
 _ensure_importable_package()
@@ -63,7 +63,7 @@ except Exception as exc:  # pragma: no cover
         f"Original error: {type(exc).__name__}: {exc}"
     ) from exc
 
-from blg_model_builder_v2.potentials import (
+from blg_model_builder.potentials import (
     PODASECalculator,
     TersoffDRIPASECalculator,
     TersoffKolmogorovCrespiASECalculator,

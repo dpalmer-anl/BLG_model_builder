@@ -1,3 +1,8 @@
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from typing import Any, Dict, Optional, Tuple, Union
+
 from scipy.spatial.distance import cdist
 import numpy as np    # always real NumPy (used by non-GPU functions throughout)
 import matplotlib.pyplot as plt
@@ -14,6 +19,170 @@ try:
 except (ImportError, Exception):
     xp = np
     _GPU = False
+
+###########################################################################################
+# TB model base class (mirrors LammpsCalculatorBase get/set_parameters pattern)
+###########################################################################################
+
+class TBModelBase(ABC):
+    """Base class for tight-binding hopping models."""
+
+    base_name: str = ""
+    fit_kind: str = "generic"
+    param_bound: float = 1e4
+
+    def __init__(self, hyperparameters: Optional[Dict[str, Any]] = None):
+        self.hyperparameters: Dict[str, Any] = dict(hyperparameters or {})
+        self._params: Optional[np.ndarray] = None
+
+    @property
+    def canonical_name(self) -> str:
+        return self.base_name
+
+    def set_parameters(self, params: Union[np.ndarray, list, tuple]) -> None:
+        self._params = np.asarray(params, dtype=float)
+
+    def get_parameters(self) -> np.ndarray:
+        if self._params is None:
+            raise ValueError(f"{self.base_name}: parameters not set")
+        return np.asarray(self._params, dtype=float).copy()
+
+    def __call__(self, descriptors, params=None):
+        """Callable interface compatible with legacy ``func(desc, params)``."""
+        p = self._params if params is None else params
+        return self.evaluate(descriptors, p)
+
+    @abstractmethod
+    def evaluate(self, descriptors, params) -> np.ndarray:
+        """Compute hopping amplitudes from descriptors and parameters."""
+
+    def default_bounds(self, n_params: int) -> np.ndarray:
+        b = float(self.param_bound)
+        return np.array([[-b, b]] * n_params, dtype=float)
+
+    def cache_basename(self) -> str:
+        return f"{self.base_name}_best_fit_params"
+
+    def descriptors(self, atoms, **kwargs):
+        """Optional: compute descriptors for *atoms* (subclasses may override)."""
+        raise NotImplementedError(f"{self.base_name} does not implement descriptors()")
+
+
+class ACSFHoppingModel(TBModelBase):
+    base_name = "ACSF_hoppings"
+    fit_kind = "acsf_linear"
+
+    def __init__(self, hyperparameters: Optional[Dict[str, Any]] = None):
+        super().__init__(hyperparameters)
+        self.M = int(self.hyperparameters.get("M", 10))
+        self.W = int(self.hyperparameters.get("W", 3))
+        self.r_cut = float(self.hyperparameters.get("r_cut", 6.0))
+        self.use_envelope = bool(self.hyperparameters.get("use_envelope", True))
+
+    @property
+    def canonical_name(self) -> str:
+        return f"{self.base_name}_M_{self.M}_W_{self.W}"
+
+    def cache_basename(self) -> str:
+        return f"{self.base_name}_M_{self.M}_W_{self.W}_best_fit_params"
+
+    def evaluate(self, descriptors, params) -> np.ndarray:
+        return get_acsf_hoppings(descriptors, params)
+
+    def descriptors(self, atoms, **kwargs):
+        from blg_model_builder.tb_descriptors import get_acsf_hopping_descriptors
+        kw = dict(
+            M=self.M, W=self.W, r_cut=self.r_cut, use_envelope=self.use_envelope,
+        )
+        kw.update(kwargs)
+        return get_acsf_hopping_descriptors(atoms, **kw)
+
+
+class ACSFHoppingSKModel(TBModelBase):
+    base_name = "ACSF_hoppings_sk"
+    fit_kind = "acsf_linear"
+
+    def __init__(self, hyperparameters: Optional[Dict[str, Any]] = None):
+        super().__init__(hyperparameters)
+        self.M = int(self.hyperparameters.get("M", 10))
+        self.W = int(self.hyperparameters.get("W", 3))
+        self.r_cut = float(self.hyperparameters.get("r_cut", 6.0))
+        self.use_envelope = bool(self.hyperparameters.get("use_envelope", True))
+
+    @property
+    def canonical_name(self) -> str:
+        return f"{self.base_name}_M_{self.M}_W_{self.W}"
+
+    def cache_basename(self) -> str:
+        return f"{self.base_name}_M_{self.M}_W_{self.W}_best_fit_params"
+
+    def evaluate(self, descriptors, params) -> np.ndarray:
+        return get_acsf_hoppings_sk(descriptors, params)
+
+    def descriptors(self, atoms, **kwargs):
+        from blg_model_builder.tb_descriptors import get_acsf_sk_hopping_descriptors
+        kw = dict(
+            M=self.M, W=self.W, r_cut=self.r_cut, use_envelope=self.use_envelope,
+        )
+        kw.update(kwargs)
+        return get_acsf_sk_hopping_descriptors(atoms, **kw)
+
+
+class MKHoppingModel(TBModelBase):
+    base_name = "MK"
+    fit_kind = "generic"
+
+    def evaluate(self, descriptors, params) -> np.ndarray:
+        return mk_hopping(descriptors, params)
+
+
+class LETBInterlayerModel(TBModelBase):
+    base_name = "LETB_interlayer"
+    fit_kind = "generic"
+
+    def cache_basename(self) -> str:
+        return "interlayer_LETB_best_fit_params"
+
+    def evaluate(self, descriptors, params) -> np.ndarray:
+        return letb_interlayer(descriptors, params)
+
+
+class LETBIntralayerModel(TBModelBase):
+    base_name = "LETB_intralayer"
+    fit_kind = "generic"
+
+    def __init__(self, hyperparameters: Optional[Dict[str, Any]] = None):
+        super().__init__(hyperparameters)
+        self.nn_val = int(self.hyperparameters.get("nn_val", 1))
+        if self.nn_val not in (1, 2, 3):
+            raise ValueError(f"LETB intralayer nn_val must be 1, 2, or 3; got {self.nn_val}")
+
+    @property
+    def canonical_name(self) -> str:
+        return f"intralayer_LETB_NN_val_{self.nn_val}"
+
+    def cache_basename(self) -> str:
+        return f"intralayer_LETB_NN_val_{self.nn_val}_best_fit_params"
+
+    def evaluate(self, descriptors, params) -> np.ndarray:
+        fn = {1: letb_intralayer_t01, 2: letb_intralayer_t02, 3: letb_intralayer_t03}[self.nn_val]
+        return fn(descriptors, params)
+
+
+def create_tb_model(model_name: str, hyperparameters: Optional[Dict[str, Any]] = None) -> TBModelBase:
+    """Factory: build a TB model instance from a model name string."""
+    from blg_model_builder.model_registry import make_hyperparams, resolve_model_spec
+    spec = resolve_model_spec(model_name)
+    if spec.tb_factory is None:
+        raise ValueError(f"Model {model_name!r} has no TB factory")
+    hp = make_hyperparams(model_name, **(hyperparameters or {}))
+    return spec.tb_factory(hp)
+
+
+def get_tb_callable(model_name: str, hyperparameters: Optional[Dict[str, Any]] = None):
+    """Return a ``(descriptors, params) -> hoppings`` callable for UQ scripts."""
+    return create_tb_model(model_name, hyperparameters)
+
 
 ###########################################################################################
 
@@ -454,4 +623,88 @@ def k_path(sym_pts,nk,report=False):
         dk_[i] = np.linalg.norm(kvec[i,:]-kvec[i-1,:]) + dk_[i-1]
 
     return (kvec,dk_, knode)
+
+
+# ── Register TB models in the central registry ───────────────────────────────
+
+def _register_tb_models() -> None:
+    from blg_model_builder.model_registry import (
+        ModelSpec,
+        _acsf_cache_basename,
+        _acsf_load_data_name,
+        _acsf_make_hyperparams,
+        _parse_acsf_mw,
+        register,
+    )
+
+    register(ModelSpec(
+        name="ACSF_hoppings_sk",
+        kind="hopping",
+        fit_kind="acsf_linear",
+        match=lambda n: n.startswith("ACSF_hoppings_sk"),
+        parse_name=lambda n: _parse_acsf_mw(n, sk=True),
+        make_hyperparams=lambda hp: _acsf_make_hyperparams(hp, sk=True),
+        cache_basename=lambda n, hp: _acsf_cache_basename(n, hp, sk=True),
+        load_data_name=lambda n, hp: _acsf_load_data_name(n, hp, sk=True),
+        tb_factory=lambda hp: ACSFHoppingSKModel(hp),
+        description="ACSF hopping with SK physics baked into descriptors",
+    ))
+    register(ModelSpec(
+        name="ACSF_hoppings",
+        kind="hopping",
+        fit_kind="acsf_linear",
+        match=lambda n: n.startswith("ACSF_hoppings") and not n.startswith("ACSF_hoppings_sk"),
+        parse_name=lambda n: _parse_acsf_mw(n, sk=False),
+        make_hyperparams=lambda hp: _acsf_make_hyperparams(hp, sk=False),
+        cache_basename=lambda n, hp: _acsf_cache_basename(n, hp, sk=False),
+        load_data_name=lambda n, hp: _acsf_load_data_name(n, hp, sk=False),
+        tb_factory=lambda hp: ACSFHoppingModel(hp),
+        description="Linear ACSF hopping model",
+    ))
+    register(ModelSpec(
+        name="MK",
+        kind="hopping",
+        fit_kind="generic",
+        match=lambda n: n.startswith("MK"),
+        parse_name=lambda n: ("MK", {}),
+        make_hyperparams=lambda hp: dict(hp),
+        cache_basename=lambda n, hp: "MK_best_fit_params",
+        load_data_name=lambda n, hp: "MK",
+        tb_factory=lambda hp: MKHoppingModel(hp),
+        description="Moon-Koshino interlayer hopping",
+    ))
+    register(ModelSpec(
+        name="LETB_interlayer",
+        kind="hopping",
+        fit_kind="generic",
+        match=lambda n: n == "LETB_interlayer",
+        parse_name=lambda n: ("LETB_interlayer", {}),
+        make_hyperparams=lambda hp: dict(hp),
+        cache_basename=lambda n, hp: "interlayer_LETB_best_fit_params",
+        load_data_name=lambda n, hp: "LETB_interlayer",
+        tb_factory=lambda hp: LETBInterlayerModel(hp),
+        description="LETB interlayer hopping",
+    ))
+    def _parse_letb_intralayer(n: str) -> Tuple[str, Dict[str, Any]]:
+        import re as _re
+        m = _re.search(r"nn_val[_\-]?(\d)", n, _re.I)
+        if m:
+            return "LETB_intralayer", {"nn_val": int(m.group(1))}
+        return "LETB_intralayer", {}
+
+    register(ModelSpec(
+        name="LETB_intralayer",
+        kind="hopping",
+        fit_kind="generic",
+        match=lambda n: n.startswith("LETB_intralayer") or n.startswith("intralayer_LETB"),
+        parse_name=_parse_letb_intralayer,
+        make_hyperparams=lambda hp: {"nn_val": int(hp.get("nn_val", 1))},
+        cache_basename=lambda n, hp: f"intralayer_LETB_NN_val_{int(hp.get('nn_val', 1))}_best_fit_params",
+        load_data_name=lambda n, hp: "LETB_intralayer",
+        tb_factory=lambda hp: LETBIntralayerModel(hp),
+        description="LETB intralayer hopping (nn_val 1/2/3)",
+    ))
+
+
+_register_tb_models()
 

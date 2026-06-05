@@ -37,7 +37,7 @@ import numpy as np
 import pandas as pd
 from scipy.interpolate import CubicSpline
 
-from blg_model_builder_v2.DataLoader import load_energy_data
+from blg_model_builder.DataLoader import load_energy_data
 
 # AA: all top atoms lie (in xy) on a bottom site within this tolerance (Å).
 _STACK_AA_MAX_TOP_BOTTOM_XY = 0.28

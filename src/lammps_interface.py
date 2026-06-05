@@ -50,7 +50,7 @@ from time import time
 import numpy as np
 
 # Geometry conversion utilities (Prism transform, force frame conversion, etc.)
-from blg_model_builder_v2.potentials import (
+from blg_model_builder.potentials import (
     ase_to_lammps,
     lammps_molecule_ids_from_atoms,
     lammps_positions_to_ase,
@@ -240,7 +240,7 @@ def _write_lammps_structure(
     computed via :func:`lammps_molecule_ids_from_atoms` and stored in a copy
     of the atoms object before writing.
     """
-    from blg_model_builder_v2.lammpsdata import write_lammps_data  # noqa: PLC0415
+    from blg_model_builder.lammpsdata import write_lammps_data  # noqa: PLC0415
 
     if atom_style == "full":
         mol_ids = lammps_molecule_ids_from_atoms(atoms, layer_tags)
@@ -1243,7 +1243,7 @@ def _acsf_hopping_gradient_from_pairs(
     kleg_t_q   : ndarray (n_triplets,)  — k-leg bond indices
     kleg_grad  : ndarray (n_triplets, 3) — ∂t_{kleg_t_p}/∂r_{kleg_t_q}
     """
-    from blg_model_builder_v2.tb_descriptors import _build_triplet_indices
+    from blg_model_builder.tb_descriptors import _build_triplet_indices
 
     pair_r = np.linalg.norm(pair_v, axis=1)           # (n_pairs,)
     n_pairs = len(pair_r)
@@ -1682,7 +1682,7 @@ class TETB_PODLammpsCalculator(LammpsCalculatorBase):
 
     def _resolve_kpoints(self, atoms) -> np.ndarray:
         """Return Cartesian k-vectors (Å⁻¹, with 2π) for this atoms object."""
-        from blg_model_builder_v2.tb_models import k_uniform_mesh, get_recip_cell
+        from blg_model_builder.tb_models import k_uniform_mesh, get_recip_cell
 
         spec = self._kpoints_spec
         if spec is None:
@@ -1730,7 +1730,7 @@ class TETB_PODLammpsCalculator(LammpsCalculatorBase):
         F_band : ndarray (N, 3) (eV/Å)
         q_i    : ndarray (N,) Mulliken charges
         """
-        from blg_model_builder_v2.tb_descriptors import get_acsf_hopping_descriptors
+        from blg_model_builder.tb_descriptors import get_acsf_hopping_descriptors
 
         M, W, rcut = self._tb_M, self._tb_W, self._tb_rcut
         N          = len(atoms)

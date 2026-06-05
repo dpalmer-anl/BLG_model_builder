@@ -4,9 +4,9 @@ import numpy as np, scipy.sparse
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import flatgraphene as fg
-from blg_model_builder_v2.tb_descriptors import get_acsf_hopping_descriptors
-from blg_model_builder_v2.tb_models import get_acsf_hoppings, get_recip_cell, k_path
-from plot_bayes_factor import resolve_ensemble_pickle
+from blg_model_builder.tb_descriptors import get_acsf_hopping_descriptors
+from blg_model_builder.tb_models import get_acsf_hoppings, get_recip_cell, k_path
+from blg_model_builder.ensemble_io import resolve_ensemble_pickle
 
 # unrelaxed 2.88° structure
 theta = 2.88

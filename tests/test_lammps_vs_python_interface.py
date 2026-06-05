@@ -32,7 +32,7 @@ pytest.importorskip(
 def _ensure_importable_package() -> None:
     """Prefer installed package; fallback to repo `src/` only if needed."""
     try:
-        import blg_model_builder_v2  # noqa: F401
+        import blg_model_builder  # noqa: F401
         return
     except Exception:
         pass
@@ -44,14 +44,14 @@ def _ensure_importable_package() -> None:
             sys.path.insert(0, p)
 
     try:
-        import blg_model_builder_v2  # noqa: F401
+        import blg_model_builder  # noqa: F401
         return
     except Exception:
         import types
 
-        pkg = types.ModuleType("blg_model_builder_v2")
+        pkg = types.ModuleType("blg_model_builder")
         pkg.__path__ = [str(src)]  # type: ignore[attr-defined]
-        sys.modules["blg_model_builder_v2"] = pkg
+        sys.modules["blg_model_builder"] = pkg
 
 
 _ensure_importable_package()
@@ -61,9 +61,9 @@ _TESTS_DIR = Path(__file__).resolve().parent
 if str(_TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(_TESTS_DIR))
 
-from blg_model_builder_v2.geom_tools import get_bilayer_atoms
+from blg_model_builder.geom_tools import get_bilayer_atoms
 # Import via potentials.py so aliases are resolved (LAMMPS Python or C++ pybind).
-from blg_model_builder_v2.potentials import (
+from blg_model_builder.potentials import (
     PODASECalculator,
     TersoffDRIPASECalculator,
     TersoffKolmogorovCrespiASECalculator,
@@ -160,7 +160,7 @@ def _write_atomic_data_file(tmpdir: Path, atoms):
 
 def _write_full_data_file(tmpdir: Path, atoms):
     """Write a `full` atom_style data file so molecule IDs are preserved."""
-    from blg_model_builder_v2.lammpsdata import write_lammps_data
+    from blg_model_builder.lammpsdata import write_lammps_data
 
     data_path = tmpdir / "structure.lmp"
     with open(data_path, "w", encoding="utf-8") as f:

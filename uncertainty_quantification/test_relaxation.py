@@ -1,6 +1,6 @@
 import ase.io 
 import flatgraphene as fg 
-from blg_model_builder_v2.pod_interface import *
+from blg_model_builder.pod_interface import *
 import numpy as np
 from ase.optimize import LBFGS
 

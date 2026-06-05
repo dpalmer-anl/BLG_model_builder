@@ -32,8 +32,8 @@ for _p in (_tests_dir, _pkg_src):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from blg_model_builder_v2.geom_tools import get_bilayer_atoms
-from blg_model_builder_v2.potentials import TersoffKolmogorovCrespiASECalculator
+from blg_model_builder.geom_tools import get_bilayer_atoms
+from blg_model_builder.potentials import TersoffKolmogorovCrespiASECalculator
 
 # Same layout as tests/test_relaxation.py (do not import that module — it runs on import)
 _BEST_FIT_DIR = os.path.normpath(

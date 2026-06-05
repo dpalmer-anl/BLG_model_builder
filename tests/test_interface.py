@@ -126,7 +126,7 @@ def test_tersoff():
     print("\n── TersoffCalculator ────────────────────────────────────────────")
     if not _require_cpp_ext():
         return True
-    from blg_model_builder_v2.potentials import TersoffCalculator
+    from blg_model_builder.potentials import TersoffCalculator
     ok = True
 
     pos, types, box = diamond_cubic("C")
@@ -190,7 +190,7 @@ def test_kolmogorov_crespi():
     print("\n── KolmogorovCrespiCalculator ───────────────────────────────────")
     if not _require_cpp_ext():
         return True
-    from blg_model_builder_v2.potentials import KolmogorovCrespiCalculator
+    from blg_model_builder.potentials import KolmogorovCrespiCalculator
     ok = True
 
     # KC requires ≤3 same-layer neighbors; need in-plane box > 2*cutoff (28 Å)
@@ -241,7 +241,7 @@ def test_drip():
     print("\n── DRIPCalculator ───────────────────────────────────────────────")
     if not _require_cpp_ext():
         return True
-    from blg_model_builder_v2.potentials import DRIPCalculator
+    from blg_model_builder.potentials import DRIPCalculator
     ok = True
 
     pos, types, layers, box = graphene_bilayer(nx=2,ny=2)
@@ -314,7 +314,7 @@ def test_pod():
     print("\n── PODASECalculator ─────────────────────────────────────────────")
     # PODASECalculator is now backed by LAMMPS Python interface (if available),
     # or the C++ pybind PODCalculator.  Either is sufficient for this test.
-    from blg_model_builder_v2.potentials import PODASECalculator, ncoeff_from_params
+    from blg_model_builder.potentials import PODASECalculator, ncoeff_from_params
     import ase
     from ase.build import bulk
     ok = True

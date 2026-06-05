@@ -6,8 +6,8 @@ from scipy.optimize import curve_fit
 import flatgraphene as fg
 
 import ase.io
-from get_MCMC_inputs import get_MCMC_inputs
-from blg_model_builder_v2.potentials import PODASECalculator
+from blg_model_builder.get_MCMC_inputs import get_MCMC_inputs
+from blg_model_builder.potentials import PODASECalculator
 from scipy.interpolate import CubicSpline
 
 csfont = {'fontname':'sans-serif',"size":15}

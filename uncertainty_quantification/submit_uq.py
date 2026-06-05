@@ -154,7 +154,7 @@ if __name__=="__main__":
         T_weight_array = np.array([1e-2,5e-2, 0.1, 0.25,0.5,0.75,1,1.25,1.5, 1.75, 2,3,4,5,10,20,30,40,50]) #np.linspace(0.1,2,8)
         M_array = [8,10,12]
         W_array = [6]
-        from pod_model_selection import load_use_pod_model_hashes
+        from blg_model_builder.pod_model_selection import load_use_pod_model_hashes
 
         _pod_hashes = load_use_pod_model_hashes()
         pod_index_array = list(range(len(_pod_hashes)))
@@ -176,7 +176,7 @@ if __name__=="__main__":
                 #if pod_index>6:
                 #    continue
                 for TW in T_weight_array:
-                    executable = "python EMCEE_generate_ensemble.py -m "+model_names +" --POD-index "+str(pod_index)+" -B "+str(TW)
+                    executable = "python run_MCMC.py -m "+model_names +" --POD-index "+str(pod_index)+" -B "+str(TW)
                     batch_options["--job-name"]=model_names+"_POD_index_"+str(pod_index)
                     batch_options["--output"]= model_names+"_POD_index_"+str(pod_index)+".log"
                     print(executable)
@@ -204,7 +204,7 @@ if __name__=="__main__":
     if relaxation:
         uq_arr = ["mcmc"] #,"cv"]
         twist_angle = np.array([0.83,0.88,0.93,0.99,1.05,1.08,1.12,1.16,1.2,1.47]) #
-        from pod_model_selection import load_use_pod_model_hashes
+        from blg_model_builder.pod_model_selection import load_use_pod_model_hashes
 
         _pod_hashes = load_use_pod_model_hashes()
         model_names = [

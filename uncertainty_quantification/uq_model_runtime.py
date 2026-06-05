@@ -83,7 +83,7 @@ def _pod_hyperparams_from_hash(pod_hash: str) -> Optional[Dict[str, Any]]:
 
     import pandas as pd
 
-    csv_path = Path(__file__).resolve().parent / "pod_hyperparam_search_results.csv"
+    csv_path = Path(__file__).resolve().parent / "pod_hyperparam_search" / "pod_hyperparam_search_results.csv"
     if not csv_path.is_file():
         return None
     df = pd.read_csv(csv_path)
@@ -91,7 +91,7 @@ def _pod_hyperparams_from_hash(pod_hash: str) -> Optional[Dict[str, Any]]:
     if match.empty:
         return None
     row = match.iloc[0]
-    from pod_model_selection import pod_hyperparams_from_row
+    from blg_model_builder.pod_model_selection import pod_hyperparams_from_row
 
     pod_hp, pod_cutoff, h = pod_hyperparams_from_row(row)
     return {"pod_hyperparams": pod_hp, "pod_cutoff": pod_cutoff, "pod_hash": h}
@@ -119,7 +119,7 @@ def mcmc_kw_for_model(model_name: str) -> Dict[str, Any]:
         # Hash not in CSV — fall back to index-based lookup
         pod_index = int(m.group(1))
         try:
-            from pod_model_selection import pod_hyperparams_for_index
+            from blg_model_builder.pod_model_selection import pod_hyperparams_for_index
 
             pod_hp, pod_cutoff, pod_hash = pod_hyperparams_for_index(pod_index)
         except (FileNotFoundError, IndexError, KeyError) as exc:
@@ -144,7 +144,7 @@ def mcmc_kw_for_model(model_name: str) -> Dict[str, Any]:
         else:
             pod_index = int(m.group(2))
             try:
-                from pod_model_selection import pod_hyperparams_for_index
+                from blg_model_builder.pod_model_selection import pod_hyperparams_for_index
 
                 pod_hp, pod_cutoff, pod_hash = pod_hyperparams_for_index(pod_index)
                 kw["pod_hyperparams"] = pod_hp
@@ -190,7 +190,7 @@ def build_uq_lammps_calculator(
     if not is_uq_lammps_model(model_name):
         raise ValueError(f"Not a UQ LAMMPS model: {model_name!r}")
 
-    from get_MCMC_inputs import get_MCMC_inputs, get_uq_lammps_runtime
+    from blg_model_builder.get_MCMC_inputs import get_MCMC_inputs, get_uq_lammps_runtime
 
     load_name = resolve_load_name(model_name)
     data_kw = {**mcmc_kw_for_model(model_name), "skip_diagnostics": True}

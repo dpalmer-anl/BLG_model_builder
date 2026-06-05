@@ -9,7 +9,7 @@ a figure under ``tests/_artifacts/`` vs filtered rVV10 DFT for **AB** and
 **unstrained AA** stackings.
 AA means **no in-plane registry shift**: each top C shares the same ``(x,y)``
 as a bottom C (identified in the DFT frames and built with
-:func:`blg_model_builder_v2.geom_tools.get_aa_bilayer_atoms`).
+:func:`blg_model_builder.geom_tools.get_aa_bilayer_atoms`).
 
 ``test_blg_pes_models_vs_dft`` also writes a **parity** scatter (DFT vs model
 energy / atom) using **every** configuration returned by the interlayer rVV10
@@ -53,7 +53,7 @@ try:
 except ImportError:
     plt = None
 
-from blg_model_builder_v2.geom_tools import get_aa_bilayer_atoms, get_bilayer_atoms
+from blg_model_builder.geom_tools import get_aa_bilayer_atoms, get_bilayer_atoms
 
 # Hyperparameters and loaders: single source of truth in test_relaxation.py
 _TESTS_DIR = Path(__file__).resolve().parent
@@ -268,7 +268,7 @@ def load_interlayer_dft_flat_masked(level: str) -> Tuple[List, np.ndarray]:
     uq = _repo_root() / "uncertainty_quantification"
     if not uq.is_dir():
         raise FileNotFoundError(f"Expected uncertainty_quantification at {uq}")
-    from blg_model_builder_v2.DataLoader import load_energy_data
+    from blg_model_builder.DataLoader import load_energy_data
 
     with _working_directory(uq):
         atoms_list, energies, _f = load_energy_data(
@@ -665,7 +665,7 @@ def _artifacts_dir() -> Path:
 
 def _load_dft_interlayer_rvv10() -> Tuple[List, np.ndarray, np.ndarray]:
     """Load primitive interlayer rVV10 set; cwd must be uncertainty_quantification/."""
-    from blg_model_builder_v2.DataLoader import load_energy_data
+    from blg_model_builder.DataLoader import load_energy_data
 
     return load_energy_data("interlayer", supercells=1, level_of_theory="rVV10")
 

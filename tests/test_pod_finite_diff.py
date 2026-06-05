@@ -15,10 +15,10 @@ import os
 import sys
 import numpy as np
 
-# Ensure blg_model_builder_v2 is importable
+# Ensure blg_model_builder is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from blg_model_builder_v2.potentials import PODASECalculator, ncoeff_from_params
+from blg_model_builder.potentials import PODASECalculator, ncoeff_from_params
 
 # ── Potential parameters (must match C_coefficients.pod) ──────────────────────
 rcut = 5.0

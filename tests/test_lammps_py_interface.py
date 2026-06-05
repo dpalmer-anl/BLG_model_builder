@@ -1,7 +1,7 @@
 """
 test_lammps_py_interface.py
 ---------------------------
-Tests for all calculators in ``blg_model_builder_v2.lammps_interface``.
+Tests for all calculators in ``blg_model_builder.lammps_interface``.
 
 These tests require the LAMMPS Python module (``from lammps import lammps``)
 to be importable.  Build LAMMPS and run ``make install-python`` (or the CMake
@@ -26,11 +26,11 @@ lammps = pytest.importorskip(
 
 # Also skip if the lammps_interface module itself fails to import.
 lammps_interface = pytest.importorskip(
-    "blg_model_builder_v2.lammps_interface",
-    reason="blg_model_builder_v2.lammps_interface not importable.",
+    "blg_model_builder.lammps_interface",
+    reason="blg_model_builder.lammps_interface not importable.",
 )
 
-from blg_model_builder_v2.lammps_interface import (
+from blg_model_builder.lammps_interface import (
     TersoffLammpsCalculator,
     KolmogorovCrespiLammpsCalculator,
     DRIPLammpsCalculator,
@@ -409,7 +409,7 @@ class TestPODLammpsCalculator:
     @pytest.fixture
     def si_setup(self):
         from ase.build import bulk
-        from blg_model_builder_v2.potentials import ncoeff_from_params
+        from blg_model_builder.potentials import ncoeff_from_params
         hp = dict(_SI_HYPERPARAMS, species=["Si"])
         nc = ncoeff_from_params(hp)
         coeffs = np.zeros(nc)
@@ -478,7 +478,7 @@ class TestPotentialsAliasing:
     legacy *ASECalculator names when lammps is available."""
 
     def test_tersoff_alias(self):
-        from blg_model_builder_v2.potentials import (
+        from blg_model_builder.potentials import (
             TersoffASECalculator,
             _LAMMPS_PY_INTERFACE_AVAILABLE,
         )
@@ -487,7 +487,7 @@ class TestPotentialsAliasing:
         assert TersoffASECalculator is TersoffLammpsCalculator
 
     def test_kc_alias(self):
-        from blg_model_builder_v2.potentials import (
+        from blg_model_builder.potentials import (
             KolmogorovCrespiASECalculator,
             _LAMMPS_PY_INTERFACE_AVAILABLE,
         )
@@ -496,7 +496,7 @@ class TestPotentialsAliasing:
         assert KolmogorovCrespiASECalculator is KolmogorovCrespiLammpsCalculator
 
     def test_drip_alias(self):
-        from blg_model_builder_v2.potentials import (
+        from blg_model_builder.potentials import (
             DRIPASECalculator,
             _LAMMPS_PY_INTERFACE_AVAILABLE,
         )
@@ -505,7 +505,7 @@ class TestPotentialsAliasing:
         assert DRIPASECalculator is DRIPLammpsCalculator
 
     def test_pod_alias(self):
-        from blg_model_builder_v2.potentials import (
+        from blg_model_builder.potentials import (
             PODASECalculator,
             _LAMMPS_PY_INTERFACE_AVAILABLE,
         )

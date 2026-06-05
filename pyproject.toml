@@ -3,9 +3,9 @@ requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "blg-model-builder-v2"
-version = "0.1.0"
-description = "Bilayer graphene model builder: LAMMPS Python interface for KC-Full, Tersoff, DRIP, and POD potentials"
+name = "blg-model-builder"
+version = "0.2.0"
+description = "Bilayer graphene model builder: LAMMPS Python interface and tight-binding UQ workflows"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
@@ -23,7 +23,7 @@ classifiers = [
 test = ["pytest>=7.0", "ase>=3.22"]
 
 [project.urls]
-Homepage = "https://example.com/blg-model-builder-v2"
+Homepage = "https://github.com/dpalmer-anl/BLG_model_builder"
 
 [tool.pytest.ini_options]
 markers = [
@@ -31,6 +31,5 @@ markers = [
 ]
 
 [tool.setuptools]
-# Map the importable package name "blg_model_builder_v2" to the src/ directory.
-packages = ["blg_model_builder_v2"]
-package-dir = { "blg_model_builder_v2" = "src" }
+packages = ["blg_model_builder"]
+package-dir = { "blg_model_builder" = "src" }

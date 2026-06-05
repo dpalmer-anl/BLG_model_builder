@@ -1,7 +1,7 @@
 import numpy as np
 import os
 from BLG_model_builder.BLG_model_library import *
-from model_fit import fit_model
+from blg_model_builder.model_fit import fit_model
 
 file_names = ["Classical_energy_interlayer_best_fit_params_estimate.npz",
             "Classical_energy_intralayer_best_fit_params_estimate.npz",

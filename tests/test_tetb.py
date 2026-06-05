@@ -52,7 +52,7 @@ from ase import Atoms
 
 def _ensure_importable_package() -> None:
     try:
-        import blg_model_builder_v2  # noqa: F401
+        import blg_model_builder  # noqa: F401
         return
     except Exception:
         pass
@@ -62,13 +62,13 @@ def _ensure_importable_package() -> None:
         if p not in sys.path:
             sys.path.insert(0, p)
     try:
-        import blg_model_builder_v2  # noqa: F401
+        import blg_model_builder  # noqa: F401
         return
     except Exception:
         import types
-        pkg = types.ModuleType("blg_model_builder_v2")
+        pkg = types.ModuleType("blg_model_builder")
         pkg.__path__ = [str(src)]  # type: ignore[attr-defined]
-        sys.modules["blg_model_builder_v2"] = pkg
+        sys.modules["blg_model_builder"] = pkg
 
 
 _ensure_importable_package()
@@ -77,9 +77,9 @@ _ensure_importable_package()
 #
 # Why this matters
 # ----------------
-# lammps_interface.py imports utility helpers from blg_model_builder_v2.potentials
+# lammps_interface.py imports utility helpers from blg_model_builder.potentials
 # (line ~53).  potentials.py in turn does
-#   ``from blg_model_builder_v2.lammps_interface import LammpsCalculatorBase, ...``
+#   ``from blg_model_builder.lammps_interface import LammpsCalculatorBase, ...``
 # at line 486.  If lammps_interface is the *first* module loaded, Python
 # registers it as partially-initialized in sys.modules, then potentials.py
 # tries to read LammpsCalculatorBase from it before that class has been
@@ -93,7 +93,7 @@ _ensure_importable_package()
 #   4. lammps_interface.py finishes → LammpsCalculatorBase etc. are defined.
 #   5. potentials.py line 486 import completes → both modules fully initialized.
 #
-import blg_model_builder_v2.potentials  # noqa: F401, E402  ← must stay at module level
+import blg_model_builder.potentials  # noqa: F401, E402  ← must stay at module level
 
 
 # ── ACSF hyperparameters used in all tests ─────────────────────────────────
@@ -151,7 +151,7 @@ def _kpoint_mesh_2d(atoms: Atoms, n: int = 3) -> np.ndarray:
     k_uniform_mesh requires a *tuple* for mesh_size because it does
     ``mesh_size + (3,)`` internally — list + tuple raises TypeError.
     """
-    from blg_model_builder_v2.tb_models import k_uniform_mesh, get_recip_cell
+    from blg_model_builder.tb_models import k_uniform_mesh, get_recip_cell
 
     k_reduced = k_uniform_mesh((n, n, 1))                  # tuple, not list
     cell = np.array(atoms.get_cell(), dtype=float)
@@ -169,8 +169,8 @@ def _tb_band_energy(atoms: Atoms, tb_params: np.ndarray,
 
     Uses the same internal helpers as TETB_PODLammpsCalculator._compute_tb.
     """
-    from blg_model_builder_v2.tb_descriptors import get_acsf_hopping_descriptors
-    from blg_model_builder_v2.lammps_interface import (
+    from blg_model_builder.tb_descriptors import get_acsf_hopping_descriptors
+    from blg_model_builder.lammps_interface import (
         _build_hamiltonians_kpoints,
         _solve_density_matrix,
     )
@@ -208,8 +208,8 @@ class TestTBEnergy:
 
     def test_dm_energy_matches_eigenvalue_sum(self, atoms, kpoints):
         """E_band from Tr(H·DM) must equal 2 × Σ_{k,occ} ε_{n,k} / n_kp."""
-        from blg_model_builder_v2.tb_descriptors import get_acsf_hopping_descriptors
-        from blg_model_builder_v2.lammps_interface import (
+        from blg_model_builder.tb_descriptors import get_acsf_hopping_descriptors
+        from blg_model_builder.lammps_interface import (
             _build_hamiltonians_kpoints,
             _solve_density_matrix,
         )
@@ -278,8 +278,8 @@ class TestHellmannFeynmanForces:
     def _analytic_forces(self, atoms: Atoms, kpoints: np.ndarray) -> np.ndarray:
         """Hellmann-Feynman band forces (N, 3) via the internal helpers used
         inside TETB_PODLammpsCalculator._compute_tb."""
-        from blg_model_builder_v2.tb_descriptors import get_acsf_hopping_descriptors
-        from blg_model_builder_v2.lammps_interface import (
+        from blg_model_builder.tb_descriptors import get_acsf_hopping_descriptors
+        from blg_model_builder.lammps_interface import (
             _build_hamiltonians_kpoints,
             _solve_density_matrix,
             _acsf_hopping_gradient_from_pairs,
@@ -378,8 +378,8 @@ class TestHoppingGradient:
     @pytest.fixture
     def grad_data(self):
         """Compute gradient data once and share across parametrized tests."""
-        from blg_model_builder_v2.tb_descriptors import get_acsf_hopping_descriptors
-        from blg_model_builder_v2.lammps_interface import _acsf_hopping_gradient_from_pairs
+        from blg_model_builder.tb_descriptors import get_acsf_hopping_descriptors
+        from blg_model_builder.lammps_interface import _acsf_hopping_gradient_from_pairs
 
         atoms = _square_lattice_2d(nx=3, ny=3, perturb=0.05)
         N = len(atoms)
@@ -397,7 +397,7 @@ class TestHoppingGradient:
     @staticmethod
     def _hoppings(atoms: Atoms, pair_i_ref, pair_j_ref) -> np.ndarray:
         """Compute t_ij for `atoms`, asserting bond topology is unchanged."""
-        from blg_model_builder_v2.tb_descriptors import get_acsf_hopping_descriptors
+        from blg_model_builder.tb_descriptors import get_acsf_hopping_descriptors
         desc, (pi, pj, _) = get_acsf_hopping_descriptors(
             atoms, M=M, W=W, r_cut=R_CUT,
         )

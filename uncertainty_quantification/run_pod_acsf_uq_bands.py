@@ -36,9 +36,9 @@ import scipy.sparse
 import scipy.sparse.linalg
 from ase.optimize import LBFGS
 
-from blg_model_builder_v2.potentials import PODASECalculator
-from blg_model_builder_v2.tb_descriptors import get_acsf_hopping_descriptors
-from blg_model_builder_v2.tb_models import (
+from blg_model_builder.potentials import PODASECalculator
+from blg_model_builder.tb_descriptors import get_acsf_hopping_descriptors
+from blg_model_builder.tb_models import (
     get_acsf_hoppings,
     get_recip_cell,
     k_path,

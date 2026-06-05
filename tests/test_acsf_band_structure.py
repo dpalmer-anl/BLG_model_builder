@@ -52,7 +52,7 @@ import scipy.sparse.linalg
 
 def _ensure_importable_package() -> None:
     try:
-        import blg_model_builder_v2  # noqa: F401
+        import blg_model_builder  # noqa: F401
         return
     except Exception:
         pass
@@ -62,13 +62,13 @@ def _ensure_importable_package() -> None:
         if p not in sys.path:
             sys.path.insert(0, p)
     try:
-        import blg_model_builder_v2  # noqa: F401
+        import blg_model_builder  # noqa: F401
         return
     except Exception:
         import types
-        pkg = types.ModuleType("blg_model_builder_v2")
+        pkg = types.ModuleType("blg_model_builder")
         pkg.__path__ = [str(src)]  # type: ignore[attr-defined]
-        sys.modules["blg_model_builder_v2"] = pkg
+        sys.modules["blg_model_builder"] = pkg
 
 
 _ensure_importable_package()
@@ -137,8 +137,8 @@ def _build_bands(
         For the dense path: midgap energy (eV) subtracted from eigenvalues.
         For the sparse path: 0.0 (no shift applied).
     """
-    from blg_model_builder_v2.tb_descriptors import get_acsf_hopping_descriptors
-    from blg_model_builder_v2.tb_models import get_acsf_hoppings
+    from blg_model_builder.tb_descriptors import get_acsf_hopping_descriptors
+    from blg_model_builder.tb_models import get_acsf_hoppings
 
     descriptors, (pair_i, pair_j, pair_v) = get_acsf_hopping_descriptors(
         atoms, M=ACSF_M, W=ACSF_W, r_cut=ACSF_RCUT,
@@ -346,7 +346,7 @@ def _fit_and_save_acsf_params(npz_path: str) -> np.ndarray:
         os.chdir(uq_dir)
         if uq_dir not in sys.path:
             sys.path.insert(0, uq_dir)
-        from blg_model_builder_v2.DataLoader import load_data_for_model
+        from blg_model_builder.DataLoader import load_data_for_model
         from model_fit import fit_acsf_linear_hopping
 
         xdata_tr, _, _, ydata_tr, _, _ = load_data_for_model(
@@ -398,13 +398,13 @@ class TestACSFBandsABBilayer:
 
     @pytest.fixture(scope="class")
     def ab_atoms(self):
-        from blg_model_builder_v2.geom_tools import get_bilayer_atoms
+        from blg_model_builder.geom_tools import get_bilayer_atoms
         return get_bilayer_atoms(d=3.35, disregistry=0.0, sc=1)
 
     @pytest.fixture(scope="class")
     def ab_bands(self, ab_atoms, acsf_params):
         """Pre-compute bands once for the whole class."""
-        from blg_model_builder_v2.tb_models import k_path, get_recip_cell
+        from blg_model_builder.tb_models import k_path, get_recip_cell
         kvec, k_dist, k_node = k_path(_SYM_PTS, NK)
         cell = np.array(ab_atoms.get_cell())
         kvec_cart = kvec @ get_recip_cell(cell.T)
@@ -436,7 +436,7 @@ class TestACSFBandsABBilayer:
         degenerate for physically reasonable hopping parameters.
         """
         evals, kvec, k_dist, _ = ab_bands
-        from blg_model_builder_v2.tb_models import k_path, get_recip_cell
+        from blg_model_builder.tb_models import k_path, get_recip_cell
 
         # Find the k-index closest to the starting K node (first point in path)
         k_K_frac = np.array(_K_NODE)
@@ -519,7 +519,7 @@ class TestACSFBandsTBG:
         k_dist : ndarray (n_kpts,) — accumulated k-distance
         k_node : ndarray (n_nodes,) — x-positions of high-symmetry points
         """
-        from blg_model_builder_v2.tb_models import k_path, get_recip_cell
+        from blg_model_builder.tb_models import k_path, get_recip_cell
         kvec, k_dist, k_node = k_path(_SYM_PTS, NK)
         cell = np.array(tblg_atoms.get_cell())
         kvec_cart = kvec @ get_recip_cell(cell.T)
@@ -534,7 +534,7 @@ class TestACSFBandsTBG:
         Uses the Fermi level from ``tblg_bands`` so both calculations share the
         same E=0 reference, enabling direct overlay comparison.
         """
-        from blg_model_builder_v2.tb_models import k_path, get_recip_cell
+        from blg_model_builder.tb_models import k_path, get_recip_cell
         _, fermi_level, _, k_dist, k_node = tblg_bands
         kvec, _, _ = k_path(_SYM_PTS, NK)
         cell = np.array(tblg_atoms.get_cell())
