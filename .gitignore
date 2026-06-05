@@ -28,7 +28,6 @@ uncertainty_quantification/bands/
 uncertainty_quantification/ensembles/
 uncertainty_quantification/trajectories/
 uncertainty_quantification/figures/
-uncertainty_quantification/best_fit_params/
 uncertainty_quantification/calibration_metrics/
 uncertainty_quantification/allegro_blg_output/
 uncertainty_quantification/relaxations_allegro/
