@@ -163,7 +163,7 @@ if __name__=="__main__":
             for M in M_array:
                 for W in W_array:
                     for TW in T_weight_array:
-                        executable = "python EMCEE_generate_ensemble.py -m "+model_names +" -M "+str(M)+" -W "+str(W)+ " -B "+str(TW)
+                        executable = "python run_MCMC.py -m "+model_names +" -M "+str(M)+" -W "+str(W)+ " -B "+str(TW)
                         batch_options["--job-name"]=model_names+"_M_"+str(M)+"_W_"+str(W)+"_T_"+str(TW)
                         batch_options["--output"]= model_names+"_M_"+str(M)+"_W_"+str(W)+"_T_"+str(TW)+".log"
                         print(executable)
@@ -194,7 +194,7 @@ if __name__=="__main__":
                     nn_val=1
                 hyper_param_str = "int_"+str(mt[0])+"_e_"+str(mt[1])+"_tb_"+str(mt[2])+"_p_"+str(p)+"_nn_"+str(nn_val)
 
-                executable = "python CV_generate_ensemble.py -i "+str(mt[0])+" -e "+str(mt[1])+" -t "+str(mt[2]) +" -p "+str(p)+" -n "+str(nn_val)
+                executable = "python run_SubSamp.py -i "+str(mt[0])+" -e "+str(mt[1])+" -t "+str(mt[2]) +" -p "+str(p)+" -n "+str(nn_val)
                 batch_options["--job-name"]=hyper_param_str
                 batch_options["--output"]= hyper_param_str+".log"
                 print(executable)

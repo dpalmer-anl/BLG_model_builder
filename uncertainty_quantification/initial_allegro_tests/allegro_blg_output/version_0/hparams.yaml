@@ -1,0 +1,163 @@
+model:
+  _target_: allegro.model.AllegroModel
+  seed: 42
+  model_dtype: float32
+  type_names:
+  - C
+  r_max: 6.0
+  radial_chemical_embed:
+    _target_: allegro.nn.TwoBodyBesselScalarEmbed
+    num_bessels: 8
+    bessel_trainable: false
+    polynomial_cutoff_p: 6
+  l_max: 1
+  parity: true
+  num_layers: 1
+  num_scalar_features: 8
+  num_tensor_features: 8
+  allegro_mlp_hidden_layers_width: 8
+  readout_mlp_hidden_layers_width: 8
+  avg_num_neighbors:
+    C: 66.17301905717152
+  per_type_energy_shifts: -254.1843619883815
+  per_type_energy_scales:
+    C: 1.0373216481171892
+num_datasets:
+  train: 1
+  val: 1
+  test: 1
+  predict: 0
+optimizer:
+  _target_: torch.optim.Adam
+  lr: 0.001
+lr_scheduler: null
+loss:
+  _target_: nequip.train.EnergyForceLoss
+  per_atom_energy: true
+  coeffs:
+    total_energy: 1.0
+    forces: 1.0
+train_metrics: null
+val_metrics:
+  _target_: nequip.train.EnergyForceMetrics
+  coeffs:
+    total_energy_mae: 1.0
+    forces_mae: 1.0
+test_metrics:
+  _target_: nequip.train.EnergyForceMetrics
+  coeffs:
+    total_energy_mae: 1.0
+    forces_mae: 1.0
+info_dict:
+  versions:
+    torch: 2.12.0
+    e3nn: 0.6.0
+    nequip: 0.18.0
+    allegro: 0.8.3
+  data:
+    _target_: nequip.data.datamodule.ASEDataModule
+    seed: 42
+    split_dataset:
+    - file_path: /mnt/c/Users/Daniel/Documents/research/BLG_model_builder_v2/data/strained_bilayer_graphene_rVV10.xyz
+      train: 700
+      val: 150
+      test: 122
+    transforms:
+    - _target_: nequip.data.transforms.ChemicalSpeciesToAtomTypeMapper
+      model_type_names:
+      - C
+      chemical_species_to_atom_type_map:
+        C: C
+    - _target_: nequip.data.transforms.NeighborListTransform
+      r_max: 6.0
+    train_dataloader:
+      _target_: torch.utils.data.DataLoader
+      batch_size: 4
+    val_dataloader:
+      _target_: torch.utils.data.DataLoader
+      batch_size: 8
+    test_dataloader:
+      _target_: torch.utils.data.DataLoader
+      batch_size: 8
+    stats_manager:
+      _target_: nequip.data.CommonDataStatisticsManager
+      type_names:
+      - C
+  trainer:
+    _target_: lightning.Trainer
+    max_epochs: 100
+    check_val_every_n_epoch: 1
+    log_every_n_steps: 10
+    logger:
+      _target_: lightning.pytorch.loggers.CSVLogger
+      save_dir: /mnt/c/Users/Daniel/Documents/research/BLG_model_builder_v2/uncertainty_quantification/allegro_blg_output
+      name: ''
+      version: 0
+    callbacks:
+    - _target_: lightning.pytorch.callbacks.ModelCheckpoint
+      monitor: val0_epoch/weighted_sum
+      mode: min
+      dirpath: /mnt/c/Users/Daniel/Documents/research/BLG_model_builder_v2/uncertainty_quantification/allegro_blg_output
+      filename: best
+      save_last: true
+    - _target_: nequip.train.callbacks.TestTimeXYZFileWriter
+      out_file: /mnt/c/Users/Daniel/Documents/research/BLG_model_builder_v2/uncertainty_quantification/allegro_blg_output/test_predictions
+      output_fields_from_original_dataset:
+      - total_energy
+      - forces
+      chemical_symbols:
+      - C
+    - _target_: nequip.train.callbacks.LossCoefficientMonitor
+      interval: epoch
+      frequency: 10
+  global_options:
+    allow_tf32: false
+  runs:
+  - train
+  - test
+  training_module:
+    _target_: nequip.train.EMALightningModule
+    loss:
+      _target_: nequip.train.EnergyForceLoss
+      per_atom_energy: true
+      coeffs:
+        total_energy: 1.0
+        forces: 1.0
+    val_metrics:
+      _target_: nequip.train.EnergyForceMetrics
+      coeffs:
+        total_energy_mae: 1.0
+        forces_mae: 1.0
+    test_metrics:
+      _target_: nequip.train.EnergyForceMetrics
+      coeffs:
+        total_energy_mae: 1.0
+        forces_mae: 1.0
+    optimizer:
+      _target_: torch.optim.Adam
+      lr: 0.001
+    model:
+      _target_: allegro.model.AllegroModel
+      seed: 42
+      model_dtype: float32
+      type_names:
+      - C
+      r_max: 6.0
+      radial_chemical_embed:
+        _target_: allegro.nn.TwoBodyBesselScalarEmbed
+        num_bessels: 8
+        bessel_trainable: false
+        polynomial_cutoff_p: 6
+      l_max: 1
+      parity: true
+      num_layers: 1
+      num_scalar_features: 8
+      num_tensor_features: 8
+      allegro_mlp_hidden_layers_width: 8
+      readout_mlp_hidden_layers_width: 8
+      avg_num_neighbors:
+        C: 66.17301905717152
+      per_type_energy_shifts: -254.1843619883815
+      per_type_energy_scales:
+        C: 1.0373216481171892
+ema_decay: 0.999
