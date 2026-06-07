@@ -111,7 +111,7 @@ def detect_target_from_model_name(model_name: str) -> Optional[str]:
         return "hopping"
     if model_name.startswith("MK") or model_name.startswith("LETB") or model_name.startswith("intralayer_LETB"):
         return "hopping"
-    if model_name.startswith("POD_energy") or model_name in (
+    if model_name.startswith("POD_energy") or model_name.startswith("Allegro_energy") or model_name in (
         "Tersoff", "DRIP", "Kolmogorov_Crespi",
         "Tersoff+DRIP", "Tersoff+Kolmogorov_Crespi",
     ):

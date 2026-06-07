@@ -35,6 +35,7 @@ Add or reuse a fit function in [`src/model_fit.py`](../src/model_fit.py):
 | Generic scipy | `fit_model` |
 | POD | `fit_pod` |
 | TETB+POD | `fit_tetb_residual_pod` |
+| Allegro | train via `initial_allegro_tests/fit_allegro.py`; load weights with `load_allegro_parameters` |
 
 Wire the fit in [`src/get_MCMC_inputs.py`](../src/get_MCMC_inputs.py) (or extend registry-driven setup).
 
@@ -50,9 +51,10 @@ Ensure CLI name expansion in `EMCEE_generate_ensemble.main()` handles hyperparam
 | Model kind | Script |
 |------------|--------|
 | LAMMPS energy | `run_uq_propagation_relaxation.py`, `run_uq_propagation_elasticity.py` |
+| Python energy (Allegro) | `run_uq_propagation_relaxation.py` (`--relax-backend ase`) |
 | TB hopping | `run_uq_propagation_bands.py` (`--tb-model`) |
 
-Register LAMMPS models in `uq_model_runtime.UQ_LAMMPS_MODELS` if needed.
+Register LAMMPS models in `uq_model_runtime.UQ_LAMMPS_MODELS`; Python models in `UQ_PYTHON_MODELS`.
 
 ## 6. Smoke test
 

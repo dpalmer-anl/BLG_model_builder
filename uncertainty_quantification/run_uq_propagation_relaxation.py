@@ -8,7 +8,7 @@ same as :mod:`plot_bayes_factor`). Supported ensembles:
 * ``POD_energy`` / ``POD_energy_POD_index_*``
 * ``TETB_POD`` / ``TETB_POD_*_POD_index_*``
 * ``Tersoff+DRIP``
-* ``Tersoff+Kolmogorov_Crespi``
+* ``Allegro_energy`` / ``Allegro_energy_ckpt_*`` (Python ASE FIRE)
 
 * Build a commensurate TBLG supercell with ``flatgraphene`` at ``--twist-angle``.
 * Shuffle the MCMC ensemble and relax until ``--n-samples`` trajectories are saved
@@ -52,8 +52,9 @@ from run_uq_propagation_elasticity import (
 )
 from uq_model_runtime import (
     apply_uq_parameters,
-    build_uq_lammps_calculator,
-    is_uq_lammps_model,
+    build_uq_calculator,
+    is_uq_energy_model,
+    is_uq_python_model,
 )
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -261,7 +262,8 @@ def main() -> None:
         nargs="+",
         required=True,
         help="Model folder name(s) under --ensemble-dir; glob wildcards supported. "
-        "Supported: POD_energy*, TETB_POD*, Tersoff+DRIP, Tersoff+Kolmogorov_Crespi.",
+        "Supported: POD_energy*, TETB_POD*, Tersoff+DRIP, "
+        "Tersoff+Kolmogorov_Crespi, Allegro_energy*.",
     )
     p.add_argument("--ensemble-dir", default="ensembles")
     p.add_argument(
@@ -339,13 +341,18 @@ def main() -> None:
 
     for model_name in models:
         print(f"\n--- Model: {model_name} ---", flush=True)
-        if not is_uq_lammps_model(model_name):
+        if not is_uq_energy_model(model_name):
             print(
-                f"  Warning: unsupported model (need LAMMPS UQ model); "
+                f"  Warning: unsupported model (need UQ energy model); "
                 f"skipping {model_name!r}.",
                 file=sys.stderr,
             )
             continue
+
+        relax_backend = args.relax_backend
+        if is_uq_python_model(model_name) and relax_backend == "lammps":
+            relax_backend = "ase"
+            print("  Using relax_backend=ase for Python Allegro model.", flush=True)
 
         pkl_path, t_used = resolve_ensemble_pickle(
             model_name,
@@ -366,8 +373,8 @@ def main() -> None:
             flush=True,
         )
 
-        calc_obj, set_params_fn, _load_name = build_uq_lammps_calculator(model_name)
-        print(f"  LAMMPS calculator: {_load_name}", flush=True)
+        calc_obj, set_params_fn, _load_name = build_uq_calculator(model_name)
+        print(f"  Calculator: {_load_name}", flush=True)
         calc_obj.prepare_batch([tblg_template])
 
         out_dir = os.path.join(
@@ -398,7 +405,7 @@ def main() -> None:
                     calc_obj,
                     theta,
                     traj_path,
-                    relax_backend=args.relax_backend,
+                    relax_backend=relax_backend,
                     etol=args.relax_etol,
                     ftol=args.relax_ftol,
                     maxiter=args.relax_maxiter,

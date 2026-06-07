@@ -147,6 +147,7 @@ def _write_config(
               frequency: 10
 
         # --------------- training module ---------------
+        # Small model (~1760 trainable params with num_scalar_features=8).
         num_scalar_features: 8
 
         training_module:

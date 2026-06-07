@@ -21,6 +21,7 @@ classifiers = [
 
 [project.optional-dependencies]
 test = ["pytest>=7.0", "ase>=3.22"]
+allegro = ["nequip-allegro"]
 
 [project.urls]
 Homepage = "https://github.com/dpalmer-anl/BLG_model_builder"

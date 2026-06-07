@@ -31,7 +31,7 @@ DEFAULT_MODEL_DIR = HERE / "allegro_blg_output"
 DEFAULT_TWIST_ANGLE = 2.88
 DEFAULT_LAT_CON = 2.46
 DEFAULT_INITIAL_SEP = 3.35
-DEFAULT_R_MAX = 5.0
+DEFAULT_R_MAX = 6.0
 DEFAULT_FMAX = 0.001   # eV/Å  convergence criterion
 DEFAULT_MAXSTEPS = 2000
 
@@ -53,8 +53,10 @@ def _load_allegro_calculator(model_dir: Path, r_max: float, device: str):
     )
     from nequip.integrations.ase import NequIPCalculator
 
-    # Prefer the best checkpoint; fall back to last
-    ckpt = model_dir / "best.ckpt"
+    # Prefer the small default checkpoint (best-v2.ckpt, ~1760 params).
+    ckpt = model_dir / "best-v2.ckpt"
+    if not ckpt.exists():
+        ckpt = model_dir / "best.ckpt"
     if not ckpt.exists():
         candidates = sorted(model_dir.glob("*.ckpt"))
         if not candidates:

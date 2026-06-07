@@ -754,6 +754,24 @@ descriptor), e.g. ensemble directories under
         ),
     )
     parser.add_argument(
+        "--allegro-checkpoint",
+        type=str,
+        default=None,
+        dest="allegro_checkpoint",
+        help=(
+            "Path to a trained Allegro .ckpt file (for -m Allegro_energy). "
+            "Defaults to initial_allegro_tests/allegro_blg_output/best-v2.ckpt "
+            "(small model, ~1760 params)."
+        ),
+    )
+    parser.add_argument(
+        "--allegro-r-max",
+        type=float,
+        default=5.0,
+        dest="allegro_r_max",
+        help="Neighbor cutoff (Å) used when building the Allegro calculator.",
+    )
+    parser.add_argument(
         "--parallel", action="store_true",
         help="Distribute walker evaluations across CPU cores using multiprocessing.Pool.",
     )
@@ -791,6 +809,10 @@ descriptor), e.g. ensemble directories under
             kw["pod_hyperparams"] = pod_hp
             kw["pod_cutoff"] = pod_cutoff
             kw["pod_hash"] = pod_hash  # for tagging/logging in callers (ignored by get_MCMC_inputs)
+        if args.allegro_checkpoint is not None:
+            kw["allegro_checkpoint"] = args.allegro_checkpoint
+        if args.allegro_r_max is not None:
+            kw["allegro_r_max"] = args.allegro_r_max
         return kw
 
     if args.parallel and args.mpi:
@@ -814,6 +836,13 @@ descriptor), e.g. ensemble directories under
             model_name = f"TETB_POD_{_tetb_tag}_POD_index_{int(args.pod_index)}_{pod_hash}"
         else:
             model_name = f"TETB_POD_{_tetb_tag}"
+
+    elif model_name == "Allegro_energy":
+        from blg_model_builder.allegro_interface import checkpoint_tag, resolve_allegro_checkpoint
+
+        ckpt = resolve_allegro_checkpoint(args.allegro_checkpoint)
+        tag = checkpoint_tag(ckpt)
+        model_name = f"Allegro_energy_ckpt_{tag}"
 
     Temperature_weight = float(args.beta)
 

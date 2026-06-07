@@ -424,6 +424,24 @@ def fit_tetb_residual_pod(
     return tb_params_arr, np.asarray(pod_coeffs, dtype=np.float64), atoms_residual
 
 
+def load_allegro_parameters(
+    checkpoint_path: str | None = None,
+    *,
+    r_max: float = 5.0,
+    device: str = "cpu",
+) -> tuple[np.ndarray, Any]:
+    """Load flat Allegro weights from a trained NequIP/Allegro checkpoint.
+
+    Training is performed outside this package (see
+    ``uncertainty_quantification/initial_allegro_tests/fit_allegro.py``).
+    """
+    from blg_model_builder.allegro_interface import AllegroCalculator, resolve_allegro_checkpoint
+
+    ckpt = resolve_allegro_checkpoint(checkpoint_path)
+    calc = AllegroCalculator(ckpt, r_max=r_max, device=device)
+    return calc.get_parameters(), calc
+
+
 def fit_torch(
     model,
     xdata,

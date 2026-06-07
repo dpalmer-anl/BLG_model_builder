@@ -42,6 +42,12 @@ Import as `blg_model_builder` (maps to the `src/` directory).
 | Tersoff + DRIP | `TersoffDRIPLammpsCalculator` |
 | POD energy | `PODLammpsCalculator` |
 | TETB + POD (hybrid) | `TETB_PODLammpsCalculator` |
+| Allegro (Python) | `AllegroCalculator` |
+
+Allegro uses the [NequIP/Allegro](https://github.com/mir-group/allegro) Python stack
+(checkpoint load + flat `get_parameters` / `set_parameters`). Install with
+`pip install -e ".[allegro]"` or `pip install nequip-allegro`. Train via
+`uncertainty_quantification/initial_allegro_tests/fit_allegro.py`.
 
 Backward-compatible `*ASECalculator` aliases are re-exported from `blg_model_builder.potentials`.
 
@@ -69,6 +75,8 @@ Model metadata and hyperparameter schemas are registered in `blg_model_builder.m
 cd uncertainty_quantification
 python run_MCMC.py -m ACSF_hoppings -M 10 -W 6 -B 0.01
 python run_MCMC.py -m POD_energy --POD-index 9 -B 0.001
+python run_MCMC.py -m Allegro_energy -B 0.001
+python run_MCMC.py -m Allegro_energy --allegro-checkpoint initial_allegro_tests/allegro_blg_output/best-v2.ckpt
 ```
 
 ### 2. Generate subsample ensemble
@@ -81,6 +89,7 @@ python run_SubSamp.py -m ACSF_hoppings_M_10_W_6 -p 0.5 -n 30
 
 ```bash
 python run_uq_propagation_relaxation.py --models POD_energy_POD_index_9_*
+python run_uq_propagation_relaxation.py --models 'Allegro_energy_ckpt_*' --relax-backend ase
 python run_uq_propagation_elasticity.py --models Tersoff+DRIP --n-samples 10
 python run_uq_propagation_bands.py --models POD_energy_* --tb-model acsf_hoppings_M_10_W_6
 ```

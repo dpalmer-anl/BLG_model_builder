@@ -635,6 +635,15 @@ def load_data_for_model(model_name, supercells=1, nn_val=None, level_of_theory="
         ydata["forces"] = forces
         xdata_train, xdata_test, ydata_train, ydata_test = train_test_split(xdata, ydata)
 
+    elif model_name.startswith("Allegro_energy"):
+        inter_atoms, inter_E, inter_F = load_energy_data(
+            "interlayer", supercells, level_of_theory=level_of_theory,
+        )
+        xdata["energy"] = inter_atoms
+        ydata["energy"] = inter_E
+        ydata["forces"] = [np.asarray(inter_F[i]) for i in range(len(inter_atoms))]
+        xdata_train, xdata_test, ydata_train, ydata_test = train_test_split(xdata, ydata)
+
     elif model_name in ("Kolmogorov_Crespi", "DRIP"):
         atoms_list, energies, forces = load_energy_data("interlayer", supercells, level_of_theory=level_of_theory)
         xdata["energy"] = atoms_list

@@ -17,6 +17,7 @@ FitKind = Literal[
     "pod",
     "tetb_pod",
     "lammps",
+    "allegro",
 ]
 
 _ACSF_MW_RE = re.compile(

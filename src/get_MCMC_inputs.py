@@ -19,6 +19,10 @@ from blg_model_builder.lammps_interface import (
     PODLammpsCalculator,
     TETB_PODLammpsCalculator,
 )
+from blg_model_builder.allegro_interface import (
+    AllegroCalculator,
+    allegro_bounds_from_params,
+)
 from blg_model_builder.model_fit import (
     fit_acsf_linear_hopping,
     fit_model,
@@ -1143,6 +1147,49 @@ def get_MCMC_inputs(model_name, calc_type="python", supercells=1,
                 bounds=bounds["energy"],
                 ypred_bestfit=ypred_bestfit["energy"],
             )
+
+    elif model_name.startswith("Allegro_energy"):
+        import blg_model_builder.energy_registry  # noqa: F401 — register Allegro_energy
+        from blg_model_builder.model_registry import cache_basename, make_hyperparams
+
+        hp = make_hyperparams(model_name, **data_kw)
+        ckpt = hp["allegro_checkpoint"]
+        r_max = hp["allegro_r_max"]
+        device = hp["allegro_device"]
+        bound_scale = hp["allegro_bound_scale"]
+        ckpt_tag = hp["allegro_ckpt_tag"]
+
+        cache_path = f"{_BEST_FIT_PARAMS_SUBDIR}/{cache_basename(model_name, hp)}.npz"
+
+        calc_obj = AllegroCalculator(ckpt, r_max=r_max, device=device)
+
+        if os.path.exists(cache_path):
+            data = np.load(cache_path)
+            params["energy"] = np.asarray(data["params"], dtype=float)
+            bounds["energy"] = np.asarray(data["bounds"], dtype=float)
+            ypred_bestfit["energy"] = _energy_ypred_for_cache(data["ypred_bestfit"])
+            calc_obj.set_parameters(params["energy"])
+        else:
+            params["energy"] = calc_obj.get_parameters()
+            bounds["energy"] = allegro_bounds_from_params(
+                params["energy"], bound_scale=bound_scale,
+            )
+            calc_obj.set_parameters(params["energy"])
+            e_bf, f_bf = calc_obj.evaluate_batch(list(xdata_train["energy"]))
+            ypred_bestfit["energy"] = e_bf
+            ypred_bestfit["forces"] = f_bf
+            np.savez(
+                cache_path,
+                params=params["energy"],
+                bounds=bounds["energy"],
+                ypred_bestfit=ypred_bestfit["energy"],
+                allegro_checkpoint=ckpt,
+                allegro_ckpt_tag=ckpt_tag,
+                allegro_r_max=r_max,
+            )
+
+        _register_uq_lammps_runtime(calc_obj)
+        calc["energy"] = _make_batch_evaluator(calc_obj, xdata["energy"])
 
     else:
         raise ValueError(f"Unknown model_name '{model_name}' for data loading")
