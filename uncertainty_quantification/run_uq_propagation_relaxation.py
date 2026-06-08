@@ -56,6 +56,7 @@ from uq_model_runtime import (
     is_uq_energy_model,
     is_uq_python_model,
 )
+from blg_model_builder.cli_hyperparams import add_hyperparam_args, collect_hyperparams
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_N_SAMPLES = DEFAULT_ELASTICITY_N_SAMPLES
@@ -319,7 +320,11 @@ def main() -> None:
     p.add_argument("--relax-ftol", type=float, default=DEFAULT_RELAX_FTOL)
     p.add_argument("--relax-maxiter", type=int, default=DEFAULT_RELAX_MAXITER)
     p.add_argument("--relax-maxeval", type=int, default=DEFAULT_RELAX_MAXEVAL)
-    args = p.parse_args()
+    add_hyperparam_args(p)
+    args, _unknown = p.parse_known_args()
+    cli_hyperparams = collect_hyperparams(args, _unknown)
+    if cli_hyperparams:
+        print(f"  CLI hyperparameters: {cli_hyperparams}", flush=True)
 
     os.chdir(HERE)
     models = expand_model_patterns(args.models, args.ensemble_dir)
@@ -373,7 +378,9 @@ def main() -> None:
             flush=True,
         )
 
-        calc_obj, set_params_fn, _load_name = build_uq_calculator(model_name)
+        calc_obj, set_params_fn, _load_name = build_uq_calculator(
+            model_name, extra_kw=cli_hyperparams or None,
+        )
         print(f"  Calculator: {_load_name}", flush=True)
         calc_obj.prepare_batch([tblg_template])
 

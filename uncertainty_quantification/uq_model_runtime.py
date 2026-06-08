@@ -204,12 +204,17 @@ def apply_uq_parameters(
 
 def build_uq_lammps_calculator(
     model_name: str,
+    extra_kw: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Any, Optional[Callable[[np.ndarray], None]], str]:
     """
     Build a LAMMPS calculator for elasticity / relaxation UQ.
 
     Returns ``(calc_obj, set_params_fn, load_name)``. ``set_params_fn`` is non-``None``
     for hybrid models (Tersoff+KC, Tersoff+DRIP, TETB_POD).
+
+    ``extra_kw`` (e.g. CLI hyperparameters) overrides the keyword arguments
+    derived from the ensemble folder name before they are forwarded to
+    :func:`get_MCMC_inputs`.
     """
     if not is_uq_lammps_model(model_name):
         raise ValueError(f"Not a UQ LAMMPS model: {model_name!r}")
@@ -218,6 +223,8 @@ def build_uq_lammps_calculator(
 
     load_name = resolve_load_name(model_name)
     data_kw = {**mcmc_kw_for_model(model_name), "skip_diagnostics": True}
+    if extra_kw:
+        data_kw.update(extra_kw)
     get_MCMC_inputs(load_name, supercells=1, **data_kw)
     meta = get_uq_lammps_runtime()
     calc_obj = meta.get("calc_obj")
@@ -231,8 +238,13 @@ def build_uq_lammps_calculator(
 
 def build_uq_python_calculator(
     model_name: str,
+    extra_kw: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Any, Optional[Callable[[np.ndarray], None]], str]:
-    """Build a Python-backed calculator (Allegro) for UQ propagation."""
+    """Build a Python-backed calculator (Allegro) for UQ propagation.
+
+    ``extra_kw`` (e.g. CLI hyperparameters) overrides the derived keyword
+    arguments before they are forwarded to :func:`get_MCMC_inputs`.
+    """
     if not is_uq_python_model(model_name):
         raise ValueError(f"Not a UQ Python model: {model_name!r}")
 
@@ -240,6 +252,8 @@ def build_uq_python_calculator(
 
     load_name = resolve_load_name(model_name)
     data_kw = {**mcmc_kw_for_model(model_name), "skip_diagnostics": True}
+    if extra_kw:
+        data_kw.update(extra_kw)
     get_MCMC_inputs(load_name, supercells=1, **data_kw)
     meta = get_uq_lammps_runtime()
     calc_obj = meta.get("calc_obj")
@@ -253,8 +267,9 @@ def build_uq_python_calculator(
 
 def build_uq_calculator(
     model_name: str,
+    extra_kw: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Any, Optional[Callable[[np.ndarray], None]], str]:
     """Dispatch to LAMMPS or Python calculator builder."""
     if is_uq_python_model(model_name):
-        return build_uq_python_calculator(model_name)
-    return build_uq_lammps_calculator(model_name)
+        return build_uq_python_calculator(model_name, extra_kw)
+    return build_uq_lammps_calculator(model_name, extra_kw)

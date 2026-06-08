@@ -24,6 +24,7 @@ from blg_model_builder.potentials import pod_hyperparams_to_str
 
 from blg_model_builder.EMCEE_generate_ensemble import evaluate_ensemble, slice_ypred_test_from_full
 from blg_model_builder.get_MCMC_inputs import get_MCMC_inputs, build_tetb_pod_hyperparams_from_data_kw
+from blg_model_builder.cli_hyperparams import add_hyperparam_args, collect_hyperparams
 from blg_model_builder.model_fit import (
     fit_acsf_linear_hopping,
     fit_model,
@@ -232,7 +233,11 @@ def main() -> None:
         default=0.1,
         help="Ridge λ for fit_acsf_linear_hopping (and TB refit inside TETB residual POD).",
     )
-    args = parser.parse_args()
+    add_hyperparam_args(parser)
+    args, _unknown = parser.parse_known_args()
+    cli_hyperparams = collect_hyperparams(args, _unknown)
+    if cli_hyperparams:
+        print(f"[SubSamp] CLI hyperparameters: {cli_hyperparams}", flush=True)
 
     rng = np.random.default_rng(args.seed)
 
@@ -276,6 +281,8 @@ def main() -> None:
         gkw["pod_W"] = args.pod_W
     if hyperparameters is not None:
         gkw["hyperparameters"] = hyperparameters
+    # Generic CLI hyperparameters override the explicit flags above.
+    gkw.update(cli_hyperparams)
 
     print("[SubSamp] loading:", model_name, "| kwargs:", gkw, flush=True)
     calc, xdata_train, xdata_test, xdata, ydata_train, ydata_test, ydata, ypred_bestfit, params, bounds = get_MCMC_inputs(

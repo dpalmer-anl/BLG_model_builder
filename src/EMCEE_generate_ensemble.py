@@ -54,6 +54,7 @@ import pickle
 import pandas as pd
 from blg_model_builder.model_fit import get_prediction
 from blg_model_builder.get_MCMC_inputs import get_MCMC_inputs, build_tetb_pod_hyperparams_from_data_kw
+from blg_model_builder.cli_hyperparams import add_hyperparam_args, collect_hyperparams
 import matplotlib.pyplot as plt
 from time import time
 
@@ -793,7 +794,11 @@ descriptor), e.g. ensemble directories under
             "for batch-backed calculators that run LAMMPS on all configs regardless."
         ),
     )
-    args = parser.parse_args()
+    add_hyperparam_args(parser)
+    args, _unknown = parser.parse_known_args()
+    cli_hyperparams = collect_hyperparams(args, _unknown)
+    if cli_hyperparams:
+        print(f"[EMCEE] CLI hyperparameters: {cli_hyperparams}", flush=True)
 
     from blg_model_builder.pod_model_selection import pod_hyperparams_for_index
 
@@ -813,6 +818,10 @@ descriptor), e.g. ensemble directories under
             kw["allegro_checkpoint"] = args.allegro_checkpoint
         if args.allegro_r_max is not None:
             kw["allegro_r_max"] = args.allegro_r_max
+        # Generic CLI hyperparameters override everything above so users can
+        # tune any model-specific knob (e.g. --two_body_radial 2) without a
+        # dedicated flag.
+        kw.update(cli_hyperparams)
         return kw
 
     if args.parallel and args.mpi:

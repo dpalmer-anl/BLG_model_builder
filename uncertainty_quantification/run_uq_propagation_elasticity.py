@@ -61,6 +61,7 @@ from uq_model_runtime import (
     build_uq_lammps_calculator,
     is_uq_lammps_model,
 )
+from blg_model_builder.cli_hyperparams import add_hyperparam_args, collect_hyperparams
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STACKINGS_ELASTIC = ("AB", "AA")
@@ -1057,7 +1058,11 @@ def main() -> None:
     p.add_argument("--figures-dir", default="figures/elasticity")
     p.add_argument("--include-dft", action="store_true", help="Also run DFT (rVV10) reference.")
     p.add_argument("--no-plots", action="store_true")
-    args = p.parse_args()
+    add_hyperparam_args(p)
+    args, _unknown = p.parse_known_args()
+    cli_hyperparams = collect_hyperparams(args, _unknown)
+    if cli_hyperparams:
+        print(f"  CLI hyperparameters: {cli_hyperparams}", flush=True)
 
     os.chdir(HERE)
     models = expand_model_patterns(args.models, args.ensemble_dir)
@@ -1118,7 +1123,9 @@ def main() -> None:
             flush=True,
         )
 
-        calc_obj, set_params_fn, _load_name = build_uq_lammps_calculator(model_name)
+        calc_obj, set_params_fn, _load_name = build_uq_lammps_calculator(
+            model_name, extra_kw=cli_hyperparams or None,
+        )
         print(f"  LAMMPS calculator: {_load_name}", flush=True)
 
         out_dir = os.path.join(args.figures_dir, model_name)

@@ -97,6 +97,7 @@ from blg_model_builder.tb_descriptors import (
     get_acsf_hopping_descriptors,
     get_acsf_sk_hopping_descriptors,
 )
+from blg_model_builder.cli_hyperparams import add_hyperparam_args, collect_hyperparams
 import types as _types
 
 # ---------------------------------------------------------------------------
@@ -313,6 +314,7 @@ def _build_bands(
     r_cut: float,
     *,
     is_sk: bool = False,
+    extra_hp: dict | None = None,
 ) -> Tuple[np.ndarray, float]:
     """Compute ACSF tight-binding band structure using ``np.linalg.eigh``.
 
@@ -346,23 +348,29 @@ def _build_bands(
         Fermi energy (eV) that was subtracted.
     """
 
+    extra_hp = dict(extra_hp or {})
+    # Forward an optional ``use_envelope`` knob to the descriptor builders.
+    _desc_kw = {}
+    if "use_envelope" in extra_hp:
+        _desc_kw["use_envelope"] = extra_hp["use_envelope"]
+
     # --- Step 1: descriptors and bond geometry ---
     if is_sk:
         # SK descriptors bake the (1-n²) / n² weighting into the columns;
         # shape (n_pairs, 2*n_feat).  pair_v is still returned for the
         # Hamiltonian construction below.
         descriptors, (pair_i, pair_j, pair_v) = get_acsf_sk_hopping_descriptors(
-            atoms, M=M, W=W, r_cut=r_cut,
+            atoms, M=M, W=W, r_cut=r_cut, **_desc_kw,
         )
     else:
         descriptors, (pair_i, pair_j, pair_v) = get_acsf_hopping_descriptors(
-            atoms, M=M, W=W, r_cut=r_cut,
+            atoms, M=M, W=W, r_cut=r_cut, **_desc_kw,
         )
     # pair_v : (n_pairs, 3) — Cartesian bond vectors in Å (with lattice offsets)
 
     # --- Step 2: hopping amplitudes (class-based TB model) ---
     tb_name = f"ACSF_hoppings_sk_M_{M}_W_{W}" if is_sk else f"ACSF_hoppings_M_{M}_W_{W}"
-    tb_model = create_tb_model(tb_name, {"M": M, "W": W, "r_cut": r_cut})
+    tb_model = create_tb_model(tb_name, {"M": M, "W": W, "r_cut": r_cut, **extra_hp})
     hoppings = tb_model(descriptors, params)
 
     N = len(atoms)
@@ -570,7 +578,11 @@ def main() -> None:
         ),
     )
 
-    args = p.parse_args()
+    add_hyperparam_args(p)
+    args, _unknown = p.parse_known_args()
+    cli_hyperparams = collect_hyperparams(args, _unknown)
+    if cli_hyperparams:
+        print(f"TB CLI hyperparameters: {cli_hyperparams}", flush=True)
 
     # Change to the script directory so relative paths (ensembles/, etc.) work.
     os.chdir(HERE)
@@ -774,6 +786,7 @@ def main() -> None:
                     tb_W,
                     args.tb_rcut,
                     is_sk=tb_canonical.startswith("ACSF_hoppings_sk"),
+                    extra_hp=cli_hyperparams or None,
                 )
             except Exception as exc:
                 print(

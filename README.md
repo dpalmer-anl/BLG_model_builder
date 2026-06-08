@@ -69,12 +69,27 @@ Model metadata and hyperparameter schemas are registered in `blg_model_builder.m
 
 ## UQ workflow
 
+> **CLI hyperparameters:** every command below accepts generic model
+> hyperparameter flags — `--KEY VALUE`, `--set KEY=VALUE`, or
+> `--hyperparams KEY=VALUE ...` — forwarded to `get_MCMC_inputs` /
+> `load_data_for_model`. E.g. `--two_body_radial 2` (POD), `--acsf_r_cut 7.0`
+> (ACSF), `--allegro_bound_scale 50` (Allegro). See
+> [`docs/add_blg_model.md`](docs/add_blg_model.md#cli-hyperparameter-specification-required-for-every-model).
+
+### 0. Fit and cache best-fit parameters (no sampling)
+
+```bash
+cd uncertainty_quantification
+python fit_model.py --models POD_energy --two_body_radial 2 --three_body_angular 4
+python fit_model.py --models ACSF_hoppings -M 10 -W 6 --acsf_r_cut 7.0
+```
+
 ### 1. Generate MCMC ensemble
 
 ```bash
 cd uncertainty_quantification
 python run_MCMC.py -m ACSF_hoppings -M 10 -W 6 -B 0.01
-python run_MCMC.py -m POD_energy --POD-index 9 -B 0.001
+python run_MCMC.py -m POD_energy --POD-index 9 -B 0.001 --set regularization=1e-10
 python run_MCMC.py -m Allegro_energy -B 0.001
 python run_MCMC.py -m Allegro_energy --allegro-checkpoint initial_allegro_tests/allegro_blg_output/best-v2.ckpt
 ```
