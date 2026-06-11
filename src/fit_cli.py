@@ -23,11 +23,12 @@ from typing import Any, Dict, List
 
 import numpy as np
 
-from blg_model_builder.cli_hyperparams import add_hyperparam_args, collect_hyperparams
-from blg_model_builder.get_MCMC_inputs import (
-    build_tetb_pod_hyperparams_from_data_kw,
-    get_MCMC_inputs,
+from blg_model_builder.cli_hyperparams import add_hyperparam_args
+from blg_model_builder.cli_model_names import (
+    collect_workflow_hyperparams,
+    expand_ensemble_model_name,
 )
+from blg_model_builder.get_MCMC_inputs import get_MCMC_inputs
 
 
 def _ravel(y: Any) -> np.ndarray:
@@ -44,38 +45,13 @@ def _ravel(y: Any) -> np.ndarray:
 def _mae(y_true: Any, y_pred: Any) -> float:
     a = _ravel(y_true)
     b = _ravel(y_pred)
-    n = min(a.size, b.size)
-    if n == 0:
-        return float("nan")
-    return float(np.mean(np.abs(a[:n] - b[:n])))
-
-
-def _expand_model_name(model_name: str, args, mcmc_kw: Dict[str, Any]) -> str:
-    """Apply the same name tagging used by the MCMC / SubSamp drivers."""
-    if model_name in ("ACSF_hoppings", "ACSF_hoppings_sk", "POD_energy", "KC_energy"):
-        if model_name == "POD_energy" and args.pod_index is not None:
-            from blg_model_builder.pod_model_selection import pod_hyperparams_for_index
-
-            _, _, pod_hash = pod_hyperparams_for_index(int(args.pod_index))
-            return f"POD_energy_POD_index_{int(args.pod_index)}_{pod_hash}"
-        return f"{model_name}_M_{args.M}_W_{args.W}"
-    if model_name == "TETB_POD":
-        _, _, tag = build_tetb_pod_hyperparams_from_data_kw(mcmc_kw)
-        if args.pod_index is not None:
-            from blg_model_builder.pod_model_selection import pod_hyperparams_for_index
-
-            _, _, pod_hash = pod_hyperparams_for_index(int(args.pod_index))
-            return f"TETB_POD_{tag}_POD_index_{int(args.pod_index)}_{pod_hash}"
-        return f"TETB_POD_{tag}"
-    if model_name == "Allegro_energy":
-        from blg_model_builder.allegro_interface import (
-            checkpoint_tag,
-            resolve_allegro_checkpoint,
+    if a.size != b.size:
+        raise ValueError(
+            f"MAE length mismatch: y_true has {a.size} values, y_pred has {b.size}."
         )
-
-        ckpt = resolve_allegro_checkpoint(args.allegro_checkpoint)
-        return f"Allegro_energy_ckpt_{checkpoint_tag(ckpt)}"
-    return model_name
+    if a.size == 0:
+        return float("nan")
+    return float(np.mean(np.abs(a - b)))
 
 
 def main() -> None:
@@ -85,8 +61,14 @@ def main() -> None:
         epilog=__doc__,
     )
     parser.add_argument(
-        "-m", "--models", nargs="+", required=True,
-        help="One or more model names (e.g. POD_energy ACSF_hoppings Allegro_energy).",
+        "-m", "--models", "--model", "--model_name",
+        nargs="+",
+        required=True,
+        dest="models",
+        help=(
+            "One or more model names — exact ``ensembles/<name>/`` folder names "
+            "or bare base names with ``-M`` / ``-W``."
+        ),
     )
     parser.add_argument("-M", "--M", type=int, default=10)
     parser.add_argument("-W", "--W", type=int, default=6)
@@ -106,7 +88,7 @@ def main() -> None:
                         help="Neighbor cutoff (Å) for the Allegro calculator.")
     add_hyperparam_args(parser)
     args, _unknown = parser.parse_known_args()
-    cli_hyperparams = collect_hyperparams(args, _unknown)
+    cli_hyperparams = collect_workflow_hyperparams(args, _unknown)
     if cli_hyperparams:
         print(f"[fit] CLI hyperparameters: {cli_hyperparams}", flush=True)
 
@@ -129,7 +111,7 @@ def main() -> None:
         kw["level_of_theory"] = args.level_of_theory
         kw.update(cli_hyperparams)
 
-        model_name = _expand_model_name(raw_name, args, kw)
+        model_name = expand_ensemble_model_name(raw_name, args, kw)
         sc = args.supercells
         if sc is None:
             sc = 2 if raw_name in ("DRIP", "Tersoff+DRIP") else 1

@@ -98,6 +98,11 @@ from blg_model_builder.tb_descriptors import (
     get_acsf_sk_hopping_descriptors,
 )
 from blg_model_builder.cli_hyperparams import add_hyperparam_args, collect_hyperparams
+from blg_model_builder.cli_model_names import (
+    add_energy_models_arg,
+    add_tb_model_arg,
+    collect_workflow_hyperparams,
+)
 import types as _types
 
 # ---------------------------------------------------------------------------
@@ -467,16 +472,7 @@ def main() -> None:
     )
 
     # --- Model / ensemble selection (mirrors run_uq_propagation_relaxation.py) ---
-    p.add_argument(
-        "--models",
-        nargs="+",
-        required=True,
-        help=(
-            "Model folder name(s) under --ensemble-dir; glob wildcards "
-            "supported.  Supported: POD_energy*, TETB_POD*, Tersoff+DRIP, "
-            "Tersoff+Kolmogorov_Crespi."
-        ),
-    )
+    add_energy_models_arg(p)
     p.add_argument("--ensemble-dir", default="ensembles")
     p.add_argument(
         "--temperature",
@@ -505,14 +501,7 @@ def main() -> None:
     )
 
     # --- TB model ---
-    p.add_argument(
-        "--tb-model",
-        default=DEFAULT_TB_MODEL,
-        help=(
-            "ACSF hopping model name.  Format: acsf_hoppings_M_<M>_W_<W>.  "
-            f"Default: {DEFAULT_TB_MODEL}."
-        ),
-    )
+    add_tb_model_arg(p, default=DEFAULT_TB_MODEL)
     p.add_argument(
         "--tb-temperature",
         type=float,
@@ -580,7 +569,7 @@ def main() -> None:
 
     add_hyperparam_args(p)
     args, _unknown = p.parse_known_args()
-    cli_hyperparams = collect_hyperparams(args, _unknown)
+    cli_hyperparams = collect_workflow_hyperparams(args, _unknown)
     if cli_hyperparams:
         print(f"TB CLI hyperparameters: {cli_hyperparams}", flush=True)
 

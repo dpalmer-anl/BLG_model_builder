@@ -6,10 +6,10 @@ Every workflow entry point (``fit_model.py``, ``run_MCMC.py`` /
 ``SubSamp_generate_ensemble.py``, and the ``run_uq_propagation_*`` scripts)
 forwards an arbitrary hyperparameter dict into
 :func:`blg_model_builder.get_MCMC_inputs.get_MCMC_inputs` (and from there into
-:func:`blg_model_builder.DataLoader.load_data_for_model`).  Because those
-functions accept ``**kwargs`` and each model reads its own keys from that dict,
-any hyperparameter a model understands can be supplied on the command line
-without adding a dedicated flag.
+:func:`blg_model_builder.DataLoader.load_data_for_model`).  Model selection
+uses the exact ``ensembles/<name>/`` folder names via
+:mod:`blg_model_builder.cli_model_names` (``-m`` / ``--models`` / ``--model`` /
+``--tb-model`` / ``--tb-models``).
 
 Two equivalent syntaxes are supported:
 

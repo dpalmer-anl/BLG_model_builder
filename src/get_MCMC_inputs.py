@@ -41,6 +41,61 @@ import matplotlib.pyplot as plt
 # (that keyword is only for ``numpy.load`` / ``numpy.save``).
 _BEST_FIT_PARAMS_SUBDIR = "best_fit_params"
 
+
+def _acsf_hopping_observation_count(y) -> int:
+    """Total hopping targets in a list-of-blocks or ndarray observation."""
+    if isinstance(y, list):
+        return int(sum(np.asarray(block, dtype=float).size for block in y))
+    y_arr = np.asarray(y)
+    if y_arr.dtype == object:
+        return int(sum(np.asarray(block, dtype=float).size for block in y_arr.ravel()))
+    return int(y_arr.size)
+
+
+def _acsf_cached_ypred_matches_train(ypred, y_train) -> bool:
+    """True when cached best-fit predictions align with the train split."""
+    return _acsf_hopping_observation_count(ypred) == _acsf_hopping_observation_count(y_train)
+
+
+def _normalize_hopping_ypred_blocks(yp) -> list:
+    """Return a list of 1-D prediction arrays (one per structure)."""
+    if isinstance(yp, list):
+        return [np.asarray(b, dtype=float).ravel() for b in yp]
+    yp_arr = np.asarray(yp)
+    if yp_arr.dtype == object and yp_arr.size > 0:
+        return [np.asarray(b, dtype=float).ravel() for b in yp_arr.ravel()]
+    return [np.asarray(yp_arr, dtype=float).ravel()]
+
+
+def _hopping_ypred_from_calc(calc_fn, x_hop_list, params) -> list:
+    """Evaluate hopping predictions on the train split."""
+    return get_prediction(calc_fn, x_hop_list, params)
+
+
+def _cached_hopping_ypred_or_recompute(
+    data,
+    *,
+    calc_fn,
+    x_train,
+    y_train,
+    params,
+    model_label: str,
+) -> list:
+    """Use cached ypred when it matches the train split; else recompute from params."""
+    if (
+        "ypred_bestfit" in data.files
+        and _acsf_cached_ypred_matches_train(data["ypred_bestfit"], y_train)
+    ):
+        return _normalize_hopping_ypred_blocks(data["ypred_bestfit"])
+    if "ypred_bestfit" in data.files:
+        print(
+            f"  {model_label}: cached ypred_bestfit length does not match "
+            "train split; recomputing from params.",
+            flush=True,
+        )
+    return _hopping_ypred_from_calc(calc_fn, x_train, params)
+
+
 # Last LAMMPS calculator built by :func:`get_MCMC_inputs` (UQ propagation scripts).
 _UQ_LAMMPS_RUNTIME: Dict[str, Any] = {}
 
@@ -292,10 +347,17 @@ def get_MCMC_inputs(model_name, calc_type="python", supercells=1,
     if model_name.startswith("MK"):
         calc["hopping"] = create_tb_model("MK", data_kw)
         if os.path.exists(f"{_BEST_FIT_PARAMS_SUBDIR}/MK_best_fit_params.npz"):
-            data = np.load(f"{_BEST_FIT_PARAMS_SUBDIR}/MK_best_fit_params.npz")
+            data = np.load(f"{_BEST_FIT_PARAMS_SUBDIR}/MK_best_fit_params.npz", allow_pickle=True)
             params["hopping"] = data["params"]
             bounds["hopping"] = data["bounds"]
-            ypred_bestfit["hopping"] = data["ypred_bestfit"]
+            ypred_bestfit["hopping"] = _cached_hopping_ypred_or_recompute(
+                data,
+                calc_fn=calc["hopping"],
+                x_train=xdata_train["hopping"],
+                y_train=ydata_train["hopping"],
+                params=params["hopping"],
+                model_label="MK",
+            )
         else:
             data = np.load(f"{_BEST_FIT_PARAMS_SUBDIR}/MK_best_fit_params_estimate.npz")
             p0 = data["params"]
@@ -363,13 +425,24 @@ def get_MCMC_inputs(model_name, calc_type="python", supercells=1,
                 bounds["hopping"] = np.asarray(data["bounds"], dtype=float)
             else:
                 bounds["hopping"] = _sk_hopping_bounds(n_par)
-            if "ypred_bestfit" in data.files:
+            if (
+                "ypred_bestfit" in data.files
+                and _acsf_cached_ypred_matches_train(
+                    data["ypred_bestfit"], ydata_train["hopping"],
+                )
+            ):
                 ypred_bestfit["hopping"] = _normalize_sk_ypred(
                     data["ypred_bestfit"],
                     xdata_train["hopping"],
                     params["hopping"],
                 )
             else:
+                if "ypred_bestfit" in data.files:
+                    print(
+                        "  ACSF_hoppings_sk: cached ypred_bestfit length does not match "
+                        "train split; recomputing from params.",
+                        flush=True,
+                    )
                 ypred_bestfit["hopping"] = _sk_ypred_from_params(
                     xdata_train["hopping"], params["hopping"],
                 )
@@ -438,13 +511,24 @@ def get_MCMC_inputs(model_name, calc_type="python", supercells=1,
                 bounds["hopping"] = np.asarray(data["bounds"], dtype=float)
             else:
                 bounds["hopping"] = _acsf_hopping_bounds(n_par)
-            if "ypred_bestfit" in data.files:
+            if (
+                "ypred_bestfit" in data.files
+                and _acsf_cached_ypred_matches_train(
+                    data["ypred_bestfit"], ydata_train["hopping"],
+                )
+            ):
                 ypred_bestfit["hopping"] = _normalize_acsf_ypred_bestfit(
                     data["ypred_bestfit"],
                     xdata_train["hopping"],
                     params["hopping"],
                 )
             else:
+                if "ypred_bestfit" in data.files:
+                    print(
+                        "  ACSF_hoppings: cached ypred_bestfit length does not match "
+                        "train split; recomputing from params.",
+                        flush=True,
+                    )
                 ypred_bestfit["hopping"] = _acsf_hopping_ypred_from_params(
                     xdata_train["hopping"], params["hopping"],
                 )
@@ -497,10 +581,20 @@ def get_MCMC_inputs(model_name, calc_type="python", supercells=1,
     elif model_name == "LETB_interlayer":
         calc["hopping"] = create_tb_model("LETB_interlayer", data_kw)
         if os.path.exists(f"{_BEST_FIT_PARAMS_SUBDIR}/interlayer_LETB_best_fit_params.npz"):
-            data = np.load(f"{_BEST_FIT_PARAMS_SUBDIR}/interlayer_LETB_best_fit_params.npz")
+            data = np.load(
+                f"{_BEST_FIT_PARAMS_SUBDIR}/interlayer_LETB_best_fit_params.npz",
+                allow_pickle=True,
+            )
             params["hopping"] = data["params"]
             bounds["hopping"] = data["bounds"]
-            ypred_bestfit["hopping"] = data["ypred_bestfit"]
+            ypred_bestfit["hopping"] = _cached_hopping_ypred_or_recompute(
+                data,
+                calc_fn=calc["hopping"],
+                x_train=xdata_train["hopping"],
+                y_train=ydata_train["hopping"],
+                params=params["hopping"],
+                model_label="LETB_interlayer",
+            )
         else:
             data = np.load(f"{_BEST_FIT_PARAMS_SUBDIR}/interlayer_LETB_best_fit_params_estimate.npz")
             p0 = data["params"]
@@ -523,10 +617,20 @@ def get_MCMC_inputs(model_name, calc_type="python", supercells=1,
         model_name = tb_letb.canonical_name
 
         if os.path.exists(f"{_BEST_FIT_PARAMS_SUBDIR}/{model_name}_best_fit_params.npz"):
-            data = np.load(f"{_BEST_FIT_PARAMS_SUBDIR}/{model_name}_best_fit_params.npz")
+            data = np.load(
+                f"{_BEST_FIT_PARAMS_SUBDIR}/{model_name}_best_fit_params.npz",
+                allow_pickle=True,
+            )
             params["hopping"] = data["params"]
             bounds["hopping"] = data["bounds"]
-            ypred_bestfit["hopping"] = data["ypred_bestfit"]
+            ypred_bestfit["hopping"] = _cached_hopping_ypred_or_recompute(
+                data,
+                calc_fn=calc["hopping"],
+                x_train=xdata_train["hopping"],
+                y_train=ydata_train["hopping"],
+                params=params["hopping"],
+                model_label=model_name,
+            )
         else:
             data = np.load(f"{_BEST_FIT_PARAMS_SUBDIR}/{model_name}_best_fit_params_estimate.npz")
             p0 = data["params"]

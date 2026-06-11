@@ -87,10 +87,10 @@ def submit_batch_file_aurora(executable,batch_options,
 
 if __name__=="__main__":
 
-    mcmc_uq = False 
+    mcmc_uq = True 
     cv_uq = False
     relaxation = False
-    band_structure = True
+    band_structure = False
     rerelax = False
 
     batch_options_uiuc_cc= {
@@ -145,7 +145,7 @@ if __name__=="__main__":
 
     model_names = ["MK","intralayer_LETB_NN_val_1","intralayer_LETB_NN_val_2","intralayer_LETB_NN_val_3","interlayer_LETB","POD_SK"]
     model_names = ["Tersoff+DRIP", "Tersoff+Kolmogorov_Crespi","POD_energy","TETB_POD"]
-    model_names = "POD_energy" #"ACSF_hoppings_sk" #
+    model_names = "ACSF_hoppings_sk" # "POD_energy" #
 
     if mcmc_uq:
         T_weight_array = np.array([1e-5,1e-4,1e-3,0.01,0.1,0.2,0.5,1,1.5,2.0,3,4,5,7,10,15,20,30,50,100,150,200,300,500]) 
@@ -257,8 +257,8 @@ if __name__=="__main__":
     if band_structure:
         uq_arr = ["mcmc"] #
         twist_angle = np.array([0.83,0.88,0.93,0.99,1.05,1.08,1.12,1.16,1.2,1.47])
-        relaxation_model = "POD_energy_POD_index_0*"
-        tb_model = "acsf_hoppings_sk_M_12_W_6"
+        relaxation_model = "POD_energy_POD_index_0_09fdb1c2b98eb30e"
+        tb_model = "ACSF_hoppings_sk_M_12_W_6"
         for t in twist_angle:
             hyper_param_str = relaxation_model+"_tb_"+tb_model+"_a_"+str(t)
 
@@ -267,6 +267,7 @@ if __name__=="__main__":
             batch_options["--output"]= hyper_param_str+".log"
             print(executable)
             submit_batch_file_delta(executable,batch_options)
+            #exit()
 
 
     

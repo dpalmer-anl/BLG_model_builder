@@ -82,3 +82,79 @@
 [2026-06-03 17:38:50,786][pytorch_lightning.utilities.rank_zero][INFO] - Restoring states from the checkpoint path at /mnt/c/Users/Daniel/Documents/research/BLG_model_builder_v2/uncertainty_quantification/allegro_blg_output/best-v2.ckpt
 [2026-06-03 17:38:50,934][pytorch_lightning.utilities.rank_zero][INFO] - Loaded model weights from the checkpoint at /mnt/c/Users/Daniel/Documents/research/BLG_model_builder_v2/uncertainty_quantification/allegro_blg_output/best-v2.ckpt
 [2026-06-03 17:38:51,616][__main__][INFO] - [rank: 0] TEST RUN END
+[2026-06-07 19:06:54,293][__main__][INFO] - [rank: 0] Starting fresh training ...
+[2026-06-07 19:06:54,299][nequip.utils.versions.package_versions][INFO] - [rank: 0] Version Information:
+[2026-06-07 19:06:54,300][nequip.utils.versions.package_versions][INFO] - [rank: 0] torch 2.12.0
+[2026-06-07 19:06:54,300][nequip.utils.versions.package_versions][INFO] - [rank: 0] e3nn 0.6.0
+[2026-06-07 19:06:54,300][nequip.utils.versions.package_versions][INFO] - [rank: 0] nequip 0.18.0
+[2026-06-07 19:06:54,301][nequip.utils.versions.package_versions][INFO] - [rank: 0] allegro 0.8.3
+[2026-06-07 19:06:54,301][__main__][INFO] - [rank: 0] This `nequip-train` run will perform the following tasks: ['train', 'test']
+[2026-06-07 19:06:54,301][__main__][INFO] - [rank: 0] and use the output directory provided by Hydra: /mnt/c/Users/Daniel/Documents/research/BLG_model_builder/uncertainty_quantification/initial_allegro_tests/allegro_blg_output
+[2026-06-07 19:06:54,652][__main__][INFO] - [rank: 0] Building datamodule ...
+[2026-06-07 19:06:54,659][nequip.data.datamodule._base_datamodule][INFO] - [rank: 0] Found 1 training dataset(s), 1 validation dataset(s), 1 test dataset(s), and 0 predict dataset(s).
+[2026-06-07 19:06:56,527][pytorch_lightning.utilities.rank_zero][INFO] - GPU available: False, using: 0 GPUs
+[2026-06-07 19:06:56,528][pytorch_lightning.utilities.rank_zero][INFO] - TPU available: False, using: 0 TPU cores
+[2026-06-07 19:06:56,528][pytorch_lightning.utilities.rank_zero][INFO] - HPU available: False, using: 0 HPUs
+[2026-06-07 19:06:56,529][pytorch_lightning.utilities.rank_zero][INFO] - 💡 Tip: For seamless cloud logging and experiment tracking, try installing [litlogger](https://pypi.org/project/litlogger/) to enable LitLogger, which logs metrics and artifacts automatically to the Lightning Experiments platform.
+[2026-06-07 19:06:59,157][nequip.data.stats_manager][INFO] - [rank: 0] Computed data statistics:
+[2026-06-07 19:06:59,157][nequip.data.stats_manager][INFO] - [rank: 0] num_neighbors_mean: 66.17301905717152
+[2026-06-07 19:06:59,159][nequip.data.stats_manager][INFO] - [rank: 0] per_type_num_neighbors_mean_C: 66.17301905717152
+[2026-06-07 19:06:59,159][nequip.data.stats_manager][INFO] - [rank: 0] per_atom_energy_mean: -254.1843619883815
+[2026-06-07 19:06:59,160][nequip.data.stats_manager][INFO] - [rank: 0] forces_rms: 1.0373216481171892
+[2026-06-07 19:06:59,161][nequip.data.stats_manager][INFO] - [rank: 0] per_type_forces_rms_C: 1.0373216481171892
+[2026-06-07 19:06:59,167][__main__][INFO] - [rank: 0] Building model and training_module from scratch ...
+[2026-06-07 19:06:59,260][__main__][INFO] - [rank: 0] TRAIN RUN START
+[2026-06-07 19:07:14,769][pytorch_lightning.utilities.rank_zero][INFO] - 
+Detected KeyboardInterrupt, attempting graceful shutdown ...
+[2026-06-07 19:07:48,860][__main__][INFO] - [rank: 0] Starting fresh training ...
+[2026-06-07 19:07:48,866][nequip.utils.versions.package_versions][INFO] - [rank: 0] Version Information:
+[2026-06-07 19:07:48,866][nequip.utils.versions.package_versions][INFO] - [rank: 0] torch 2.12.0
+[2026-06-07 19:07:48,867][nequip.utils.versions.package_versions][INFO] - [rank: 0] e3nn 0.6.0
+[2026-06-07 19:07:48,867][nequip.utils.versions.package_versions][INFO] - [rank: 0] nequip 0.18.0
+[2026-06-07 19:07:48,867][nequip.utils.versions.package_versions][INFO] - [rank: 0] allegro 0.8.3
+[2026-06-07 19:07:48,868][__main__][INFO] - [rank: 0] This `nequip-train` run will perform the following tasks: ['train', 'test']
+[2026-06-07 19:07:48,868][__main__][INFO] - [rank: 0] and use the output directory provided by Hydra: /mnt/c/Users/Daniel/Documents/research/BLG_model_builder/uncertainty_quantification/initial_allegro_tests/allegro_blg_output
+[2026-06-07 19:07:49,047][__main__][INFO] - [rank: 0] Building datamodule ...
+[2026-06-07 19:07:49,055][nequip.data.datamodule._base_datamodule][INFO] - [rank: 0] Found 1 training dataset(s), 1 validation dataset(s), 1 test dataset(s), and 0 predict dataset(s).
+[2026-06-07 19:07:49,587][pytorch_lightning.utilities.rank_zero][INFO] - GPU available: False, using: 0 GPUs
+[2026-06-07 19:07:49,588][pytorch_lightning.utilities.rank_zero][INFO] - TPU available: False, using: 0 TPU cores
+[2026-06-07 19:07:49,588][pytorch_lightning.utilities.rank_zero][INFO] - HPU available: False, using: 0 HPUs
+[2026-06-07 19:07:49,590][pytorch_lightning.utilities.rank_zero][INFO] - 💡 Tip: For seamless cloud logging and experiment tracking, try installing [litlogger](https://pypi.org/project/litlogger/) to enable LitLogger, which logs metrics and artifacts automatically to the Lightning Experiments platform.
+[2026-06-07 19:07:51,940][nequip.data.stats_manager][INFO] - [rank: 0] Computed data statistics:
+[2026-06-07 19:07:51,941][nequip.data.stats_manager][INFO] - [rank: 0] num_neighbors_mean: 66.17301905717152
+[2026-06-07 19:07:51,941][nequip.data.stats_manager][INFO] - [rank: 0] per_type_num_neighbors_mean_C: 66.17301905717152
+[2026-06-07 19:07:51,942][nequip.data.stats_manager][INFO] - [rank: 0] per_atom_energy_mean: -254.1843619883815
+[2026-06-07 19:07:51,942][nequip.data.stats_manager][INFO] - [rank: 0] forces_rms: 1.0373216481171892
+[2026-06-07 19:07:51,943][nequip.data.stats_manager][INFO] - [rank: 0] per_type_forces_rms_C: 1.0373216481171892
+[2026-06-07 19:07:51,948][__main__][INFO] - [rank: 0] Building model and training_module from scratch ...
+[2026-06-07 19:07:52,022][__main__][INFO] - [rank: 0] TRAIN RUN START
+[2026-06-07 19:07:59,678][pytorch_lightning.utilities.rank_zero][INFO] - 
+Detected KeyboardInterrupt, attempting graceful shutdown ...
+[2026-06-07 19:55:22,243][__main__][INFO] - [rank: 0] Starting fresh training ...
+[2026-06-07 19:55:22,248][nequip.utils.versions.package_versions][INFO] - [rank: 0] Version Information:
+[2026-06-07 19:55:22,248][nequip.utils.versions.package_versions][INFO] - [rank: 0] torch 2.12.0
+[2026-06-07 19:55:22,248][nequip.utils.versions.package_versions][INFO] - [rank: 0] e3nn 0.6.0
+[2026-06-07 19:55:22,248][nequip.utils.versions.package_versions][INFO] - [rank: 0] nequip 0.18.0
+[2026-06-07 19:55:22,249][nequip.utils.versions.package_versions][INFO] - [rank: 0] allegro 0.8.3
+[2026-06-07 19:55:22,250][__main__][INFO] - [rank: 0] This `nequip-train` run will perform the following tasks: ['train', 'test']
+[2026-06-07 19:55:22,251][__main__][INFO] - [rank: 0] and use the output directory provided by Hydra: /mnt/c/Users/Daniel/Documents/research/BLG_model_builder/uncertainty_quantification/initial_allegro_tests/allegro_blg_output
+[2026-06-07 19:55:22,486][__main__][INFO] - [rank: 0] Building datamodule ...
+[2026-06-07 19:55:22,493][nequip.data.datamodule._base_datamodule][INFO] - [rank: 0] Found 1 training dataset(s), 1 validation dataset(s), 1 test dataset(s), and 0 predict dataset(s).
+[2026-06-07 19:55:23,382][pytorch_lightning.utilities.rank_zero][INFO] - GPU available: False, using: 0 GPUs
+[2026-06-07 19:55:23,383][pytorch_lightning.utilities.rank_zero][INFO] - TPU available: False, using: 0 TPU cores
+[2026-06-07 19:55:23,383][pytorch_lightning.utilities.rank_zero][INFO] - HPU available: False, using: 0 HPUs
+[2026-06-07 19:55:23,384][pytorch_lightning.utilities.rank_zero][INFO] - 💡 Tip: For seamless cloud logging and experiment tracking, try installing [litlogger](https://pypi.org/project/litlogger/) to enable LitLogger, which logs metrics and artifacts automatically to the Lightning Experiments platform.
+[2026-06-07 19:55:25,931][nequip.data.stats_manager][INFO] - [rank: 0] Computed data statistics:
+[2026-06-07 19:55:25,932][nequip.data.stats_manager][INFO] - [rank: 0] num_neighbors_mean: 66.17301905717152
+[2026-06-07 19:55:25,932][nequip.data.stats_manager][INFO] - [rank: 0] per_type_num_neighbors_mean_C: 66.17301905717152
+[2026-06-07 19:55:25,933][nequip.data.stats_manager][INFO] - [rank: 0] per_atom_energy_mean: -254.1843619883815
+[2026-06-07 19:55:25,933][nequip.data.stats_manager][INFO] - [rank: 0] forces_rms: 1.0373216481171892
+[2026-06-07 19:55:25,933][nequip.data.stats_manager][INFO] - [rank: 0] per_type_forces_rms_C: 1.0373216481171892
+[2026-06-07 19:55:25,937][__main__][INFO] - [rank: 0] Building model and training_module from scratch ...
+[2026-06-07 19:55:26,024][__main__][INFO] - [rank: 0] TRAIN RUN START
+[2026-06-07 20:08:32,716][pytorch_lightning.utilities.rank_zero][INFO] - `Trainer.fit` stopped: `max_epochs=100` reached.
+[2026-06-07 20:08:32,811][__main__][INFO] - [rank: 0] TRAIN RUN END
+[2026-06-07 20:08:32,813][__main__][INFO] - [rank: 0] TEST RUN START
+[2026-06-07 20:08:33,976][pytorch_lightning.utilities.rank_zero][INFO] - Restoring states from the checkpoint path at /mnt/c/Users/Daniel/Documents/research/BLG_model_builder/uncertainty_quantification/initial_allegro_tests/allegro_blg_output/best-v5.ckpt
+[2026-06-07 20:08:34,108][pytorch_lightning.utilities.rank_zero][INFO] - Loaded model weights from the checkpoint at /mnt/c/Users/Daniel/Documents/research/BLG_model_builder/uncertainty_quantification/initial_allegro_tests/allegro_blg_output/best-v5.ckpt
+[2026-06-07 20:08:34,851][__main__][INFO] - [rank: 0] TEST RUN END

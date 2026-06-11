@@ -54,37 +54,130 @@ def _chebyshev(x, M: int):
     return T
  
  
-def _build_triplet_indices(pair_i, N: int):
+def _build_triplet_indices(pair_i: _np.ndarray, pair_j: _np.ndarray, N: int):
     """
-    For every directed pair p = (i, j), enumerate all directed pairs
-    q = (i, k) with k ≠ j (same centre atom i, different neighbour).
+    For every directed half-list bond p = (i → j), enumerate secondary bonds
+    from **both** atom i's and atom j's complete neighbourhoods (fully vectorised,
+    GPU-accelerated when CuPy is available).
 
-    CPU-only (Python loops + _np).  Returns plain NumPy int64 arrays.
-    Callers move t_p / t_q to GPU themselves after this call.
+    Produces a *symmetric* three-body descriptor:
+
+        φ₃_sym(i→j) = ½ [Σ_{k∈nb(i),k≠j} f(r_ik) T(r_ik) cosʷ θ_ijk
+                        + Σ_{k∈nb(j),k≠i} f(r_jk) T(r_jk) cosʷ θ_jik]
+
+    so φ₃_sym(i→j) = φ₃_sym(j→i) → t(i→j) = t(j→i) → zero K-point gap.
+
+    Four contributions (cos θ always uses ``pair_v[p]`` as primary direction):
+
+      Cond 1  i-env fwd  pair_i[q]==i, pair_j[q]≠j          t_sign = +1
+      Cond 2  i-env rev  pair_j[q]==i, pair_i[q]≠j          t_sign = −1
+      Cond 3  j-env fwd  pair_i[q]==j, pair_j[q]≠i          t_sign = −1
+      Cond 4  j-env rev  pair_j[q]==j, pair_i[q]≠i          t_sign = +1
+
+    The caller multiplies the accumulated three-body block by 0.5.
+
+    Parameters
+    ----------
+    pair_i, pair_j : (n_pairs,) CPU int arrays  (from ASE NeighborList)
+    N : total number of atoms
+
+    Returns
+    -------
+    t_p, t_q : (n_triplets,) xp int64  (GPU when CuPy available, else CPU)
+    t_sign   : (n_triplets,) xp float64
     """
-    # pair_i must be a CPU array — guard in case caller passes a CuPy array
-    if hasattr(pair_i, 'get'):        # CuPy array
-        pair_i = pair_i.get()
-    pair_i = _np.asarray(pair_i)
+    # Transfer index arrays from CPU (ASE output) to the active device.
+    # xp = cupy on GPU, numpy on CPU — no-op when xp is numpy.
+    pi = xp.asarray(pair_i, dtype=xp.int32)
+    pj = xp.asarray(pair_j, dtype=xp.int32)
 
-    atom_pairs = [[] for _ in range(N)]
-    for p, i in enumerate(pair_i):
-        atom_pairs[i].append(p)
+    n = len(pi)
+    if n == 0:
+        return (
+            xp.empty(0, dtype=xp.int64),
+            xp.empty(0, dtype=xp.int64),
+            xp.empty(0, dtype=xp.float64),
+        )
 
-    t_p_chunks, t_q_chunks = [], []
-    for nb in atom_pairs:
-        if len(nb) < 2:
-            continue
-        arr = _np.asarray(nb, dtype=_np.int64)
-        pp, qq = _np.meshgrid(arr, arr, indexing="ij")
-        mask = pp != qq
-        t_p_chunks.append(pp[mask])
-        t_q_chunks.append(qq[mask])
+    # ── CSR-style bond lookup (all on xp / GPU) ─────────────────────────────
+    # order_center[off_c[a] : off_c[a]+cnt_c[a]]  lists bond indices q where
+    # pi[q] == a (a is centre).  Likewise for order_target / off_t / cnt_t.
+    order_center = xp.argsort(pi, kind='stable').astype(xp.int64)
+    order_target = xp.argsort(pj, kind='stable').astype(xp.int64)
 
-    if not t_p_chunks:
-        return _np.empty(0, dtype=_np.int64), _np.empty(0, dtype=_np.int64)
+    cnt_c = xp.bincount(pi, minlength=N).astype(xp.int64)
+    cnt_t = xp.bincount(pj, minlength=N).astype(xp.int64)
 
-    return _np.concatenate(t_p_chunks), _np.concatenate(t_q_chunks)
+    off_c = xp.empty(N, dtype=xp.int64)
+    off_t = xp.empty(N, dtype=xp.int64)
+    off_c[0] = off_t[0] = 0
+    if N > 1:
+        xp.cumsum(cnt_c[:-1], out=off_c[1:])
+        xp.cumsum(cnt_t[:-1], out=off_t[1:])
+
+    p_idx = xp.arange(n, dtype=xp.int64)
+
+    # ── Vectorised expand-and-filter ────────────────────────────────────────
+    # For each primary bond p, expand every secondary bond q from the group
+    # selected by atom_sel[p], then discard pairs where excl_q[q]==excl_p[p].
+
+    t_p_parts: list = []
+    t_q_parts: list = []
+    s_parts:   list = []
+
+    # Single cumulative buffer, preallocated and reused across 4 _expand calls.
+    _cum = xp.empty(n + 1, dtype=xp.int64)
+
+    def _expand(atom_sel, off, cnt, order, excl_p, excl_q, sign: float) -> None:
+        grp_size = cnt[atom_sel]      # (n,) secondaries per primary bond
+        total    = int(grp_size.sum())   # D2H sync — needed for xp.arange(total)
+        if total == 0:
+            return
+
+        # Prefix cumulative sum: _cum[p] = Σ grp_size[0:p]
+        _cum[0] = 0
+        xp.cumsum(grp_size, out=_cum[1:])
+
+        # Expand primary bond indices (repeated by group size)
+        t_p_raw = xp.repeat(p_idx, grp_size)                   # (total,)
+
+        # Secondary bond index = CSR_start[p] + intra_offset
+        # = (off[atom_sel[p]] - _cum[p]) + global_arange
+        base    = off[atom_sel] - _cum[:-1]                    # (n,)
+        idx_arr = xp.repeat(base, grp_size)
+        idx_arr += xp.arange(total, dtype=xp.int64)            # in-place add
+        t_q_raw = order[idx_arr]                               # (total,)
+
+        # Drop "self" bonds: excl_q[q] == excl_p[p]
+        keep  = excl_q[t_q_raw] != xp.repeat(excl_p, grp_size)
+        n_keep = int(keep.sum())                               # D2H sync for xp.full
+        if n_keep == 0:
+            return
+        t_p_parts.append(t_p_raw[keep])
+        t_q_parts.append(t_q_raw[keep])
+        s_parts.append(xp.full(n_keep, sign, dtype=xp.float64))
+
+    # Condition 1: i-env fwd  group=center[pi], excl pj[q]==pj[p]
+    _expand(pi, off_c, cnt_c, order_center, pj, pj, +1.0)
+    # Condition 2: i-env rev  group=target[pi], excl pi[q]==pj[p]
+    _expand(pi, off_t, cnt_t, order_target, pj, pi, -1.0)
+    # Condition 3: j-env fwd  group=center[pj], excl pj[q]==pi[p]
+    _expand(pj, off_c, cnt_c, order_center, pi, pj, -1.0)
+    # Condition 4: j-env rev  group=target[pj], excl pi[q]==pi[p]
+    _expand(pj, off_t, cnt_t, order_target, pi, pi, +1.0)
+
+    if not t_p_parts:
+        return (
+            xp.empty(0, dtype=xp.int64),
+            xp.empty(0, dtype=xp.int64),
+            xp.empty(0, dtype=xp.float64),
+        )
+
+    return (
+        xp.concatenate(t_p_parts),
+        xp.concatenate(t_q_parts),
+        xp.concatenate(s_parts),
+    )
  
  
 # ── Public API ───────────────────────────────────────────────────────────────
@@ -109,7 +202,8 @@ def get_acsf_hopping_descriptors(
     M : int
         Number of Chebyshev radial basis functions (T_1 … T_M).
     W : int
-        Number of angular exponents (cos^1 … cos^W).
+        Number of angular exponents (cos^1 … cos^W).  Use ``W=0`` for a
+        two-body-only descriptor (no three-body / angular block).
     r_cut : float
         Cutoff radius in Å.  Pairs with r_ij > r_cut are excluded.
     use_envelope : bool
@@ -121,15 +215,19 @@ def get_acsf_hopping_descriptors(
     descriptors : ndarray, shape (n_pairs, M + M*W)
         Each row is the descriptor vector for directed pair (i, j).
         Columns 0…M-1 are the two-body block;
-        columns M…M+M·W-1 are the three-body block.
+        columns M…M+M·W-1 are the three-body block (empty when ``W=0``).
     pair_indices : (i_array, j_array, v_array)
         ``i_array``, ``j_array``: centre and neighbour indices, shape (n_pairs,) each.
         ``v_array``: bond vectors (Angstrom) row-aligned with ``descriptors``, same as
         ASE ``NeighborList`` convention (minimal image / wrap), shape (n_pairs, 3).
         Used with cell vectors to recover ``(di, dj)`` and match HDF5 tight-binding keys.
     """
-    if M < 1 or W < 1:
-        raise ValueError("M and W must be ≥ 1")
+    if M < 1:
+        raise ValueError("M must be ≥ 1")
+    if W < 0:
+        raise ValueError("W must be ≥ 0")
+
+    n_desc = M + M * W
 
     N = len(atoms)
     pos  = atoms.get_positions()   # _np (ASE always returns NumPy)
@@ -159,7 +257,7 @@ def get_acsf_hopping_descriptors(
     if not i_chunks:
         empty_idx = _np.array([], dtype=_np.int32)
         empty_v   = _np.empty((0, 3), dtype=_np.float64)
-        return _np.empty((0, M + M * W)), (empty_idx, empty_idx, empty_v)
+        return _np.empty((0, n_desc)), (empty_idx, empty_idx, empty_v)
 
     # Integer index arrays stay on CPU (used for Hamiltonian scatter indexing)
     pair_i = _np.concatenate(i_chunks)   # (n_pairs,) int32
@@ -180,47 +278,55 @@ def get_acsf_hopping_descriptors(
 
     two_body = cheb  # (n_pairs, M)
 
+    if W == 0:
+        return two_body, (pair_i, pair_j, pair_v)
+
     # ── Three-body block ────────────────────────────────────────────────────
     three_body = xp.zeros((n_pairs, M, W), dtype=xp.float64)
 
-    # _build_triplet_indices runs on CPU; move indices to xp afterwards
-    t_p_cpu, t_q_cpu = _build_triplet_indices(pair_i, N)
+    # _build_triplet_indices now runs on the active device (GPU or CPU) and
+    # returns xp-arrays directly — no transfer required.
+    t_p, t_q, t_sign = _build_triplet_indices(pair_i, pair_j, N)
 
-    if len(t_p_cpu) > 0:
-        t_p = xp.asarray(t_p_cpu)   # no-op when xp=_np
-        t_q = xp.asarray(t_q_cpu)
-
+    if len(t_p) > 0:
         v_p = pair_v[t_p]           # (n_triplets, 3)
         v_q = pair_v[t_q]
         r_p = pair_r[t_p]           # (n_triplets,)
         r_q = pair_r[t_q]
 
-        cos_theta = xp.einsum("nd,nd->n", v_p, v_q) / (r_p * r_q)
+        # cos(angle between primary bond r_ij and secondary bond r_ik).
+        # For forward bonds: r_ik = +pair_v[q]  → cos = dot(v_p, v_q)/(r_p r_q)
+        # For reverse bonds: r_ik = -pair_v[q'] → cos = -dot(v_p, v_q')/(r_p r_q')
+        # Encoded as: cos_theta = t_sign * dot(v_p, v_q) / (r_p * r_q)
+        cos_theta = t_sign * xp.einsum("nd,nd->n", v_p, v_q) / (r_p * r_q)
         xp.clip(cos_theta, -1.0, 1.0, out=cos_theta)
 
-        cos_pw = xp.empty((len(t_p_cpu), W), dtype=xp.float64)
+        cos_pw = xp.empty((len(t_p), W), dtype=xp.float64)
         cos_pw[:, 0] = cos_theta
         for w in range(1, W):
             cos_pw[:, w] = cos_pw[:, w - 1] * cos_theta
 
-        cheb_q  = cheb[t_q]                                  # (n_triplets, M)
+        cheb_q  = cheb[t_q]                                 # (n_triplets, M)
         contrib = cheb_q[:, :, xp.newaxis] * cos_pw[:, xp.newaxis, :]  # (n_triplets, M, W)
 
-        # Scatter Σ_k contributions into j-leg pair slots.
+        # Scatter Σ_k contributions into primary-pair slots.
         # GPU: cupyx.scatter_add (fast).
         # CPU: scipy sparse matmul — drastically faster than np.add.at for large arrays.
         if _GPU:
             cupyx.scatter_add(three_body, t_p, contrib)
         else:
-            nt = len(t_p_cpu)
+            nt = len(t_p)
             # Build (n_pairs × n_triplets) sparse indicator: entry [p, k] = 1 when t_p[k] == p
             smat = _sparse.csr_matrix(
-                (_np.ones(nt, dtype=_np.float64), (t_p_cpu, _np.arange(nt))),
+                (_np.ones(nt, dtype=_np.float64), (t_p, _np.arange(nt))),
                 shape=(n_pairs, nt),
             )
             three_body += (smat @ contrib.reshape(nt, M * W)).reshape(n_pairs, M, W)
 
-        three_body *= cheb[:, :, xp.newaxis]
+        # Multiply by cheb[p] (radial basis of primary bond) then normalise.
+        # The factor of 0.5 averages the contributions from atom i's and atom j's
+        # environments, ensuring φ₃_sym(i→j) = φ₃_sym(j→i) and thus t(i→j) = t(j→i).
+        three_body *= 0.5 * cheb[:, :, xp.newaxis]
 
     # ── Assemble ────────────────────────────────────────────────────────────
     descriptors = xp.concatenate(
@@ -250,7 +356,8 @@ def get_acsf_sk_hopping_descriptors(
     M : int
         Number of Chebyshev radial basis functions (T_1 … T_M).
     W : int
-        Number of angular exponents (cos^1 … cos^W).
+        Number of angular exponents (cos^1 … cos^W).  Use ``W=0`` for a
+        two-body-only descriptor (no three-body / angular block).
     r_cut : float
         Cutoff radius in Å.  Pairs with r_ij > r_cut are excluded.
     use_envelope : bool
@@ -262,7 +369,7 @@ def get_acsf_sk_hopping_descriptors(
     descriptors : ndarray, shape (n_pairs, M + M*W)
         Each row is the descriptor vector for directed pair (i, j).
         Columns 0…M-1 are the two-body block;
-        columns M…M+M·W-1 are the three-body block.
+        columns M…M+M·W-1 are the three-body block (empty when ``W=0``).
     pair_indices : (i_array, j_array, v_array)
         ``i_array``, ``j_array``: centre and neighbour indices, shape (n_pairs,) each.
         ``v_array``: bond vectors (Angstrom) row-aligned with ``descriptors``, same as

@@ -54,7 +54,12 @@ import pickle
 import pandas as pd
 from blg_model_builder.model_fit import get_prediction
 from blg_model_builder.get_MCMC_inputs import get_MCMC_inputs, build_tetb_pod_hyperparams_from_data_kw
-from blg_model_builder.cli_hyperparams import add_hyperparam_args, collect_hyperparams
+from blg_model_builder.cli_hyperparams import add_hyperparam_args
+from blg_model_builder.cli_model_names import (
+    add_model_name_arg,
+    collect_workflow_hyperparams,
+    expand_ensemble_model_name,
+)
 import matplotlib.pyplot as plt
 from time import time
 
@@ -732,7 +737,7 @@ descriptor), e.g. ensemble directories under
   python EMCEE_generate_ensemble.py -m TETB_POD -B 0.0001 -M 10 -W 6
 """,
     )
-    parser.add_argument("-m", "--model_name", type=str, default="MK")
+    add_model_name_arg(parser, default="MK")
     parser.add_argument("-B", "--beta", type=str, default="1")
     parser.add_argument(
         "-M", "--M", type=int, default=10,
@@ -796,7 +801,7 @@ descriptor), e.g. ensemble directories under
     )
     add_hyperparam_args(parser)
     args, _unknown = parser.parse_known_args()
-    cli_hyperparams = collect_hyperparams(args, _unknown)
+    cli_hyperparams = collect_workflow_hyperparams(args, _unknown)
     if cli_hyperparams:
         print(f"[EMCEE] CLI hyperparameters: {cli_hyperparams}", flush=True)
 
@@ -827,31 +832,8 @@ descriptor), e.g. ensemble directories under
     if args.parallel and args.mpi:
         parser.error("--parallel and --mpi are mutually exclusive.")
 
-    model_name = args.model_name
-    if model_name in ("ACSF_hoppings", "ACSF_hoppings_sk"):
-        model_name = model_name + "_M_" + str(args.M) + "_W_" + str(args.W)
-    elif model_name == "POD_energy":
-        if args.pod_index is not None:
-            _mcmc_kw_for_tag = _get_mcmc_kw()
-            pod_hash = str(_mcmc_kw_for_tag.get("pod_hash", "unknown"))
-            model_name = f"POD_energy_POD_index_{int(args.pod_index)}_{pod_hash}"
-        else:
-            model_name = model_name + "_M_" + str(args.M) + "_W_" + str(args.W)
-    elif model_name == "TETB_POD":
-        _mcmc_kw_for_tag = _get_mcmc_kw()
-        _, _, _tetb_tag = build_tetb_pod_hyperparams_from_data_kw(_mcmc_kw_for_tag)
-        if args.pod_index is not None:
-            pod_hash = str(_mcmc_kw_for_tag.get("pod_hash", "unknown"))
-            model_name = f"TETB_POD_{_tetb_tag}_POD_index_{int(args.pod_index)}_{pod_hash}"
-        else:
-            model_name = f"TETB_POD_{_tetb_tag}"
-
-    elif model_name == "Allegro_energy":
-        from blg_model_builder.allegro_interface import checkpoint_tag, resolve_allegro_checkpoint
-
-        ckpt = resolve_allegro_checkpoint(args.allegro_checkpoint)
-        tag = checkpoint_tag(ckpt)
-        model_name = f"Allegro_energy_ckpt_{tag}"
+    _mcmc_kw = _get_mcmc_kw()
+    model_name = expand_ensemble_model_name(args.model_name, args, _mcmc_kw)
 
     Temperature_weight = float(args.beta)
 
@@ -865,7 +847,6 @@ descriptor), e.g. ensemble directories under
     # process runs get_MCMC_inputs; workers run it inside _pool_initializer.
     print("[timing] starting get_MCMC_inputs ...", flush=True)
     _t0 = time()
-    _mcmc_kw = _get_mcmc_kw()
     if args.pod_index is not None and args.model_name in ("POD_energy", "TETB_POD"):
         print(
             f"[EMCEE] POD_index={int(args.pod_index)} "

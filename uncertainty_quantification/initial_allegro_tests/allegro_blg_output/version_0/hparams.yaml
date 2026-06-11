@@ -13,10 +13,10 @@ model:
   l_max: 1
   parity: true
   num_layers: 1
-  num_scalar_features: 8
+  num_scalar_features: 4
   num_tensor_features: 8
-  allegro_mlp_hidden_layers_width: 8
-  readout_mlp_hidden_layers_width: 8
+  allegro_mlp_hidden_layers_width: 4
+  readout_mlp_hidden_layers_width: 4
   avg_num_neighbors:
     C: 66.17301905717152
   per_type_energy_shifts: -254.1843619883815
@@ -58,7 +58,7 @@ info_dict:
     _target_: nequip.data.datamodule.ASEDataModule
     seed: 42
     split_dataset:
-    - file_path: /mnt/c/Users/Daniel/Documents/research/BLG_model_builder_v2/data/strained_bilayer_graphene_rVV10.xyz
+    - file_path: /mnt/c/Users/Daniel/Documents/research/BLG_model_builder/data/strained_bilayer_graphene_rVV10.xyz
       train: 700
       val: 150
       test: 122
@@ -90,18 +90,18 @@ info_dict:
     log_every_n_steps: 10
     logger:
       _target_: lightning.pytorch.loggers.CSVLogger
-      save_dir: /mnt/c/Users/Daniel/Documents/research/BLG_model_builder_v2/uncertainty_quantification/allegro_blg_output
+      save_dir: /mnt/c/Users/Daniel/Documents/research/BLG_model_builder/uncertainty_quantification/initial_allegro_tests/allegro_blg_output
       name: ''
       version: 0
     callbacks:
     - _target_: lightning.pytorch.callbacks.ModelCheckpoint
       monitor: val0_epoch/weighted_sum
       mode: min
-      dirpath: /mnt/c/Users/Daniel/Documents/research/BLG_model_builder_v2/uncertainty_quantification/allegro_blg_output
+      dirpath: /mnt/c/Users/Daniel/Documents/research/BLG_model_builder/uncertainty_quantification/initial_allegro_tests/allegro_blg_output
       filename: best
       save_last: true
     - _target_: nequip.train.callbacks.TestTimeXYZFileWriter
-      out_file: /mnt/c/Users/Daniel/Documents/research/BLG_model_builder_v2/uncertainty_quantification/allegro_blg_output/test_predictions
+      out_file: /mnt/c/Users/Daniel/Documents/research/BLG_model_builder/uncertainty_quantification/initial_allegro_tests/allegro_blg_output/test_predictions
       output_fields_from_original_dataset:
       - total_energy
       - forces
@@ -151,10 +151,10 @@ info_dict:
       l_max: 1
       parity: true
       num_layers: 1
-      num_scalar_features: 8
+      num_scalar_features: 4
       num_tensor_features: 8
-      allegro_mlp_hidden_layers_width: 8
-      readout_mlp_hidden_layers_width: 8
+      allegro_mlp_hidden_layers_width: 4
+      readout_mlp_hidden_layers_width: 4
       avg_num_neighbors:
         C: 66.17301905717152
       per_type_energy_shifts: -254.1843619883815

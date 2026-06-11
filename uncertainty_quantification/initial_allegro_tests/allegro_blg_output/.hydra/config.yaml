@@ -9,7 +9,7 @@ data:
   _target_: nequip.data.datamodule.ASEDataModule
   seed: ${seed}
   split_dataset:
-  - file_path: /mnt/c/Users/Daniel/Documents/research/BLG_model_builder_v2/data/strained_bilayer_graphene_rVV10.xyz
+  - file_path: /mnt/c/Users/Daniel/Documents/research/BLG_model_builder/data/strained_bilayer_graphene_rVV10.xyz
     train: 700
     val: 150
     test: 122
@@ -57,7 +57,7 @@ trainer:
   - _target_: nequip.train.callbacks.LossCoefficientMonitor
     interval: epoch
     frequency: 10
-num_scalar_features: 8
+num_scalar_features: 4
 training_module:
   _target_: nequip.train.EMALightningModule
   loss:
@@ -91,8 +91,8 @@ training_module:
     num_layers: 1
     num_scalar_features: ${num_scalar_features}
     num_tensor_features: 8
-    allegro_mlp_hidden_layers_width: ${num_scalar_features}
-    readout_mlp_hidden_layers_width: ${num_scalar_features}
+    allegro_mlp_hidden_layers_width: 4
+    readout_mlp_hidden_layers_width: 4
     avg_num_neighbors: ${training_data_stats:per_type_num_neighbors_mean}
     per_type_energy_shifts: ${training_data_stats:per_atom_energy_mean}
     per_type_energy_scales: ${training_data_stats:per_type_forces_rms}

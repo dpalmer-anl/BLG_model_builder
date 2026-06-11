@@ -54,14 +54,17 @@ from blg_model_builder.ensemble_io import (
     resolve_ensemble_pickle,
 )
 from blg_model_builder.strain_data import LAT_CON, STRAIN_RANGE, load_strained_data
-from visualizations.plot_poisson_ratio import print_summary
 
 from uq_model_runtime import (
     apply_uq_parameters,
     build_uq_lammps_calculator,
     is_uq_lammps_model,
 )
-from blg_model_builder.cli_hyperparams import add_hyperparam_args, collect_hyperparams
+from blg_model_builder.cli_hyperparams import add_hyperparam_args
+from blg_model_builder.cli_model_names import (
+    add_energy_models_arg,
+    collect_workflow_hyperparams,
+)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STACKINGS_ELASTIC = ("AB", "AA")
@@ -1013,13 +1016,7 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    p.add_argument(
-        "--models",
-        nargs="+",
-        required=True,
-        help="Model folder name(s) under --ensemble-dir; glob wildcards supported. "
-        "Supported: POD_energy*, TETB_POD*, Tersoff+DRIP, Tersoff+Kolmogorov_Crespi.",
-    )
+    add_energy_models_arg(p)
     p.add_argument("--ensemble-dir", default="ensembles")
     p.add_argument(
         "--temperature",
@@ -1060,7 +1057,7 @@ def main() -> None:
     p.add_argument("--no-plots", action="store_true")
     add_hyperparam_args(p)
     args, _unknown = p.parse_known_args()
-    cli_hyperparams = collect_hyperparams(args, _unknown)
+    cli_hyperparams = collect_workflow_hyperparams(args, _unknown)
     if cli_hyperparams:
         print(f"  CLI hyperparameters: {cli_hyperparams}", flush=True)
 
@@ -1094,7 +1091,22 @@ def main() -> None:
                 _plot_coupling_ensemble(
                     "DFT_rVV10", stacking, [dft_results[stacking]], dft_out,
                 )
-        print_summary({k: dft_results[k] for k in dft_results})
+        for stacking in sorted(dft_results):
+            res = dft_results[stacking]
+            if not res:
+                continue
+            parts = [
+                f"{key}={float(res[key]):.4f}"
+                for key in ("nu_xz", "nu_yz", "nu_xy")
+                if key in res and np.isfinite(float(res[key]))
+            ]
+            sep0 = float(res.get("sep0", float("nan")))
+            src = res.get("source", "reference")
+            print(
+                f"  {src} ({stacking})  sep0={sep0:.4f} Å"
+                + ("  " + "  ".join(parts) if parts else ""),
+                flush=True,
+            )
 
     for model_name in models:
         print(f"\n--- Model: {model_name} ---", flush=True)

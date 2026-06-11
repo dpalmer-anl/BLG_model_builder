@@ -28,8 +28,9 @@ Examples
 --------
 Discover MCMC ensemble files and compute hopping metrics (default output dir)::
 
-    python plot_bayes_factor.py --calculate --models ACSF_hoppings_M_10_W_4 \\
-        --technique mcmc --target hopping --auto-discover
+    cd uncertainty_quantification
+    python visualizations/plot_bayes_factor.py --calculate \\
+        --models ACSF_hoppings_sk_M_12_W_1 --technique mcmc --auto-discover
 
 Compare several hopping models on one figure (same *T* grid from saved files)::
 
@@ -57,10 +58,14 @@ import os
 import pickle
 import re
 import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import matplotlib.pyplot as plt
+
+HERE = Path(__file__).resolve().parent
+UQ_DIR = HERE.parent
 
 # -----------------------------------------------------------------------------
 # Core metrics (NumPy)
@@ -264,6 +269,36 @@ def default_p_grid() -> np.ndarray:
 
 _RE_MCMC_T = re.compile(r"_ensemble_T_([^/]+)\.pkl$")
 _RE_SUB_P = re.compile(r"_SubSamp_ensemble_p_([^/]+)\.pkl$")
+
+
+def _similar_ensemble_folder_names(
+    model_name: str,
+    ensemble_dir: str,
+    *,
+    limit: int = 8,
+) -> List[str]:
+    """Return ensemble subfolder names that partially match ``model_name``."""
+    root = Path(ensemble_dir)
+    if not root.is_dir():
+        return []
+    needle = model_name.lower()
+    scored: List[Tuple[int, str]] = []
+    for child in sorted(root.iterdir()):
+        if not child.is_dir():
+            continue
+        name = child.name
+        low = name.lower()
+        if needle in low or low in needle:
+            scored.append((0, name))
+            continue
+        # Same M/W tag but different ACSF variant (e.g. missing ``_sk``).
+        mw = re.search(r"m[_\-](\d+)[_\-]w[_\-](\d+)", needle, re.I)
+        if mw and re.search(
+            rf"m[_\-]{mw.group(1)}[_\-]w[_\-]{mw.group(2)}", low, re.I,
+        ):
+            scored.append((1, name))
+    scored.sort(key=lambda t: (t[0], t[1]))
+    return [name for _, name in scored[:limit]]
 
 
 def discover_mcmc_files(model_name: str, ensemble_dir: str = "ensembles") -> List[Tuple[float, str]]:
@@ -1277,6 +1312,10 @@ def main() -> None:
     if not args.calculate and not args.plot_metrics and not args.diagnostics:
         p.error("Select at least one of: --calculate, --plot-metrics, --diagnostics")
 
+    # Paths such as ``ensembles/`` and ``calibration_metrics/`` are relative to
+    # ``uncertainty_quantification/``, not ``visualizations/``.
+    os.chdir(UQ_DIR)
+
     technique = args.technique
     ensemble_root = getattr(args, "ensemble_dir", "ensembles")
     models = expand_model_patterns(args.models, ensemble_root)
@@ -1309,10 +1348,14 @@ def main() -> None:
                 target=target,
             )
             if control_values.size == 0 or not any(os.path.isfile(p) for p in paths):
-                print(
-                    f"No {technique} ensemble files for {model_name} under {ensemble_root}",
-                    file=sys.stderr,
+                msg = (
+                    f"No {technique} ensemble files for {model_name} under "
+                    f"{ensemble_root!r} (cwd={os.getcwd()!r})"
                 )
+                similar = _similar_ensemble_folder_names(model_name, ensemble_root)
+                if similar:
+                    msg += "\n  Similar ensemble folders: " + ", ".join(similar)
+                print(msg, file=sys.stderr)
                 continue
 
             # ── 3. T0 reference (reads sidecar JSON, no LAMMPS) ──────────────

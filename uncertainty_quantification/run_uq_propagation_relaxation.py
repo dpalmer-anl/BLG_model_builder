@@ -56,7 +56,11 @@ from uq_model_runtime import (
     is_uq_energy_model,
     is_uq_python_model,
 )
-from blg_model_builder.cli_hyperparams import add_hyperparam_args, collect_hyperparams
+from blg_model_builder.cli_hyperparams import add_hyperparam_args
+from blg_model_builder.cli_model_names import (
+    add_energy_models_arg,
+    collect_workflow_hyperparams,
+)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_N_SAMPLES = DEFAULT_ELASTICITY_N_SAMPLES
@@ -258,14 +262,7 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    p.add_argument(
-        "--models",
-        nargs="+",
-        required=True,
-        help="Model folder name(s) under --ensemble-dir; glob wildcards supported. "
-        "Supported: POD_energy*, TETB_POD*, Tersoff+DRIP, "
-        "Tersoff+Kolmogorov_Crespi, Allegro_energy*.",
-    )
+    add_energy_models_arg(p)
     p.add_argument("--ensemble-dir", default="ensembles")
     p.add_argument(
         "--temperature",
@@ -322,7 +319,7 @@ def main() -> None:
     p.add_argument("--relax-maxeval", type=int, default=DEFAULT_RELAX_MAXEVAL)
     add_hyperparam_args(p)
     args, _unknown = p.parse_known_args()
-    cli_hyperparams = collect_hyperparams(args, _unknown)
+    cli_hyperparams = collect_workflow_hyperparams(args, _unknown)
     if cli_hyperparams:
         print(f"  CLI hyperparameters: {cli_hyperparams}", flush=True)
 

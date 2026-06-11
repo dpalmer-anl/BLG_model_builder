@@ -24,7 +24,12 @@ from blg_model_builder.potentials import pod_hyperparams_to_str
 
 from blg_model_builder.EMCEE_generate_ensemble import evaluate_ensemble, slice_ypred_test_from_full
 from blg_model_builder.get_MCMC_inputs import get_MCMC_inputs, build_tetb_pod_hyperparams_from_data_kw
-from blg_model_builder.cli_hyperparams import add_hyperparam_args, collect_hyperparams
+from blg_model_builder.cli_hyperparams import add_hyperparam_args
+from blg_model_builder.cli_model_names import (
+    add_model_name_arg,
+    collect_workflow_hyperparams,
+    expand_ensemble_model_name,
+)
 from blg_model_builder.model_fit import (
     fit_acsf_linear_hopping,
     fit_model,
@@ -186,7 +191,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Subsample-training bootstrap ensembles (SubSamp tag).",
     )
-    parser.add_argument("-m", "--model_name", type=str, default="ACSF_hoppings")
+    add_model_name_arg(parser, default="ACSF_hoppings")
     parser.add_argument("-p", "--p_subset", type=float, default=0.5)
     parser.add_argument("-n", "--nsamples", type=int, default=30)
     parser.add_argument("-M", "--M", type=int, default=10)
@@ -235,37 +240,21 @@ def main() -> None:
     )
     add_hyperparam_args(parser)
     args, _unknown = parser.parse_known_args()
-    cli_hyperparams = collect_hyperparams(args, _unknown)
+    cli_hyperparams = collect_workflow_hyperparams(args, _unknown)
     if cli_hyperparams:
         print(f"[SubSamp] CLI hyperparameters: {cli_hyperparams}", flush=True)
 
     rng = np.random.default_rng(args.seed)
 
-    model_name = args.model_name
-    if model_name in ("ACSF_hoppings", "POD_energy", "KC_energy"):
-        model_name = f"{model_name}_M_{args.M}_W_{args.W}"
-    elif model_name == "TETB_POD":
-        _tag_kw: Dict[str, Any] = {"M": args.M, "W": args.W}
-        if args.tb_M is not None:
-            _tag_kw["tb_M"] = args.tb_M
-        if args.tb_W is not None:
-            _tag_kw["tb_W"] = args.tb_W
-        if args.pod_M is not None:
-            _tag_kw["pod_M"] = args.pod_M
-        if args.pod_W is not None:
-            _tag_kw["pod_W"] = args.pod_W
-        _, _, _tetb_tag = build_tetb_pod_hyperparams_from_data_kw(_tag_kw)
-        model_name = f"TETB_POD_{_tetb_tag}"
-
     hyperparameters = None
-    if model_name.startswith("LETB_intralayer"):
+    if args.model_name.startswith("LETB_intralayer"):
         if args.nn_val is None:
             raise SystemExit(
                 "LETB_intralayer models require --nn-val (1, 2, or 3), matching get_MCMC_inputs."
             )
         hyperparameters = {"nn_val": int(args.nn_val)}
 
-    if model_name == "DRIP" or model_name == "Tersoff+DRIP":
+    if args.model_name == "DRIP" or args.model_name == "Tersoff+DRIP":
         sc = 2
     else:
         sc = 1
@@ -281,8 +270,9 @@ def main() -> None:
         gkw["pod_W"] = args.pod_W
     if hyperparameters is not None:
         gkw["hyperparameters"] = hyperparameters
-    # Generic CLI hyperparameters override the explicit flags above.
     gkw.update(cli_hyperparams)
+
+    model_name = expand_ensemble_model_name(args.model_name, args, gkw)
 
     print("[SubSamp] loading:", model_name, "| kwargs:", gkw, flush=True)
     calc, xdata_train, xdata_test, xdata, ydata_train, ydata_test, ydata, ypred_bestfit, params, bounds = get_MCMC_inputs(
