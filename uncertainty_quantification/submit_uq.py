@@ -172,14 +172,125 @@ def partition_tasks_into_jobs(tasks: list[str], njobs: int) -> list[list[str]]:
     return chunks
 
 
-def write_mcmc_task_file(job_index: int, tasks: list[str]) -> str:
+def write_mcmc_task_file(
+    job_index: int,
+    tasks: list[str],
+    *,
+    prefix: str = "pod_mcmc",
+) -> str:
     """Write one command per line; return the task-file path."""
     os.makedirs(MCMC_TASK_LIST_DIR, exist_ok=True)
-    path = os.path.join(MCMC_TASK_LIST_DIR, f"pod_mcmc_job_{job_index:03d}.txt")
+    path = os.path.join(MCMC_TASK_LIST_DIR, f"{prefix}_job_{job_index:03d}.txt")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(tasks))
         fh.write("\n")
     return path
+
+
+def _acsf_ensemble_pkl_exists(model_name: str, M: int, W: int, tw: float) -> bool:
+    """True if an ACSF ensemble pickle already exists for (M, W, temperature)."""
+    ensemble_name = f"{model_name}_M_{int(M)}_W_{int(W)}"
+    pattern = (
+        f"ensembles/{ensemble_name}/"
+        f"{ensemble_name}_ensemble_T_{tw}.pkl"
+    )
+    return bool(glob.glob(pattern))
+
+
+def collect_acsf_sk_mcmc_tasks(
+    model_name: str,
+    M: int,
+    W: int,
+    t_weight_array,
+    *,
+    skip_existing: bool = True,
+) -> list[str]:
+    """Build run_MCMC.py commands for one (M, W) over all temperatures."""
+    tasks = []
+    for tw in t_weight_array:
+        if skip_existing and _acsf_ensemble_pkl_exists(model_name, M, W, tw):
+            continue
+        tasks.append(
+            f"python run_MCMC.py -m {model_name} -M {int(M)} -W {int(W)} -B {tw}"
+        )
+    return tasks
+
+
+def submit_acsf_sk_mcmc_jobs(
+    model_name: str,
+    M_array,
+    W_array,
+    t_weight_array,
+    batch_options: dict,
+    *,
+    nmax_tasks: int = 64,
+    submit_fn=None,
+    skip_existing: bool = False,
+) -> int:
+    """Submit one Slurm job per (M, W); temperatures run in parallel via srun.
+
+    Each job writes a task file of ``run_MCMC.py`` commands (one per T) and
+    launches ``ntasks = min(n_temps, nmax_tasks)`` Slurm tasks through
+    :mod:`run_mcmc_task_runner`.
+
+    Returns the number of jobs submitted.
+    """
+    if submit_fn is None:
+        submit_fn = submit_batch_file_uiuc_cc
+
+    M_unique = list(dict.fromkeys(int(m) for m in M_array))
+    W_unique = list(dict.fromkeys(int(w) for w in W_array))
+
+    submitted = 0
+    job_i = 0
+    for M in M_unique:
+        for W in W_unique:
+            tasks = collect_acsf_sk_mcmc_tasks(
+                model_name,
+                M,
+                W,
+                t_weight_array,
+                skip_existing=skip_existing,
+            )
+            if not tasks:
+                print(
+                    f"[submit_acsf_sk_mcmc_jobs] skip {model_name} M={M} W={W}: "
+                    "no pending temperatures",
+                    flush=True,
+                )
+                continue
+
+            ntasks = min(len(tasks), nmax_tasks)
+            tag = f"{model_name}_M_{M}_W_{W}"
+            task_file = write_mcmc_task_file(job_i, tasks, prefix=tag)
+            opts = batch_options.copy()
+            opts["--ntasks"] = ntasks
+            opts["--cpus-per-task"] = 1
+            opts["--job-name"] = tag
+            opts["--output"] = f"{tag}_%j.log"
+            if ntasks > 1:
+                executable = (
+                    f"srun python run_mcmc_task_runner.py --tasks-file {task_file}\n"
+                )
+            else:
+                executable = (
+                    f"python run_mcmc_task_runner.py --tasks-file {task_file}\n"
+                )
+            print(
+                f"[submit_acsf_sk_mcmc_jobs] {tag}: {len(tasks)} temperature(s), "
+                f"ntasks={ntasks}, file={task_file}",
+                flush=True,
+            )
+            submit_fn(executable, opts)
+            submitted += 1
+            job_i += 1
+
+    print(
+        f"[submit_acsf_sk_mcmc_jobs] submitted {submitted} job(s) "
+        f"({len(M_unique)} M × {len(W_unique)} W)",
+        flush=True,
+    )
+    return submitted
 
 
 def submit_pod_mcmc_jobs(
@@ -223,7 +334,7 @@ def submit_pod_mcmc_jobs(
     submitted = 0
     for job_i, chunk in enumerate(job_chunks):
         ntasks = min(len(chunk), nmax_tasks)
-        task_file = write_mcmc_task_file(job_i, chunk)
+        task_file = write_mcmc_task_file(job_i, chunk, prefix="pod_mcmc")
         opts = batch_options.copy()
         opts["--ntasks"] = ntasks
         opts["--job-name"] = f"{model_name}_mcmc_{job_i:03d}"
@@ -322,9 +433,9 @@ def submit_batch_file_aurora(executable,batch_options,
 
 if __name__=="__main__":
 
-    mcmc_uq = False 
+    mcmc_uq = True
     cv_uq = False
-    relaxation = True
+    relaxation = False
     allegro_relaxation = False
     band_structure = False
     rerelax = False
@@ -380,39 +491,47 @@ if __name__=="__main__":
 
     model_names = ["MK","intralayer_LETB_NN_val_1","intralayer_LETB_NN_val_2","intralayer_LETB_NN_val_3","interlayer_LETB","POD_SK"]
     model_names = ["Tersoff+DRIP", "Tersoff+Kolmogorov_Crespi","POD_energy","TETB_POD"]
-    model_names = "POD_energy" #"ACSF_hoppings_sk" #"POD_energy" # 
+    model_names = "ACSF_hoppings_sk" 
 
     if mcmc_uq:
         T_weight_array = np.array([1e-5,1e-4,1e-3,0.01,0.1,0.2,0.5,1,1.5,2.0,3,4,5,7,10,15,20,30,50,100,150,200,300,500]) 
         T_weight_array = np.array([1e-5,1e-4,1e-3,0.01,0.1,1,5,10,25,50,100,150,200,300,500]) 
         T_weight_array = np.array([np.round(10**i,8) for i in np.linspace(-4,6,20)])
         T_weight_array = np.array([0.01,0.05,0.1,0.25,0.5,0.75,1.0,1.25,1.5,2.0,3.0,4.0,5.0]) #np.linspace(0.1,2,8)
-        M_array = [6,7,8,9,10,11,12,12,14,15]
+        M_array = [6,7,8,9,10,11,12,14,15]
         W_array = [0,1,2,3,4,5,6]
-        from pathlib import Path
 
-        import pandas as pd
-        from blg_model_builder.pod_model_selection import POD_SEARCH_RESULTS_CSV
+        if model_names == "ACSF_hoppings_sk":
+            batch_options_sk_mcmc = {
+                "--partition": "qmchamm",
+                "--nodes": 1,
+                "--cpus-per-task": 1,
+                "--time": "48:00:00",
+                "--job-name": "ACSF_sk_mcmc",
+                "--output": "ACSF_sk_mcmc_%j.log",
+                "modules": ["anaconda/2023-Mar/3"],
+            }
+            # Overwrite existing SK ensembles (needed after the 3-body PBC fix).
+            submit_acsf_sk_mcmc_jobs(
+                model_names,
+                M_array,
+                W_array,
+                T_weight_array,
+                batch_options_sk_mcmc,
+                skip_existing=False,
+            )
 
-        _pod_csv = Path(POD_SEARCH_RESULTS_CSV)
-        if not _pod_csv.is_file():
-            raise FileNotFoundError(f"POD search results not found: {_pod_csv}")
-        pod_index_array = list(range(len(pd.read_csv(_pod_csv))))
-
-        if model_names =="ACSF_hoppings_sk":
-            for M in M_array:
-                for W in W_array:
-                    for TW in T_weight_array:
-                        executable = "python run_MCMC.py -m "+model_names +" -M "+str(M)+" -W "+str(W)+ " -B "+str(TW)
-                        batch_options["--job-name"]=model_names+"_M_"+str(M)+"_W_"+str(W)+"_T_"+str(TW)
-                        batch_options["--output"]= model_names+"_M_"+str(M)+"_W_"+str(W)+"_T_"+str(TW)+".log"
-                        print(executable)
-                        #submit_batch_file_uiuc_cc(executable,batch_options)
-                        subprocess.call(executable,shell=True)
-                        #exit()
-                           
-        
         elif model_names == "POD_energy" or model_names == "TETB_POD":
+            from pathlib import Path
+
+            import pandas as pd
+            from blg_model_builder.pod_model_selection import POD_SEARCH_RESULTS_CSV
+
+            _pod_csv = Path(POD_SEARCH_RESULTS_CSV)
+            if not _pod_csv.is_file():
+                raise FileNotFoundError(f"POD search results not found: {_pod_csv}")
+            pod_index_array = list(range(len(pd.read_csv(_pod_csv))))
+
             batch_options_pod_mcmc = {
                 "--partition": "qmchamm",
                 "--nodes": 1,
