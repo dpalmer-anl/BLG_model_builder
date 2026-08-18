@@ -438,22 +438,22 @@ def _safe_filename_part(s: str) -> str:
 
 def _bands_output_path(
     output_dir: str,
-    model_name: str,
-    t_label: str,
-    tb_model_canonical: str,
-    tb_t_label: str,
-    theta: float,
     sample_index: int,
 ) -> str:
-    base = (
-        f"{_safe_filename_part(model_name)}"
-        f"_T{_safe_filename_part(t_label)}"
-        f"_{_safe_filename_part(tb_model_canonical)}"
-        f"_tbT{_safe_filename_part(tb_t_label)}"
-        f"_theta{theta:g}deg"
-        f"_sample{sample_index:04d}.npz"
+    # Directory already encodes model / T / TB / θ; keep the filename short.
+    return os.path.join(output_dir, f"sample{sample_index:04d}.npz")
+
+
+def _existing_bands_npz(output_dir: str, sample_index: int) -> str | None:
+    """Return an existing sample npz path (short or legacy long name), else None."""
+    short = _bands_output_path(output_dir, sample_index)
+    if os.path.isfile(short):
+        return short
+    # Legacy: ``…_sampleNNNN.npz`` (full model/T/TB/θ prefix in the filename).
+    legacy = sorted(
+        glob.glob(os.path.join(output_dir, f"*_sample{sample_index:04d}.npz"))
     )
-    return os.path.join(output_dir, base)
+    return legacy[0] if legacy else None
 
 
 # ---------------------------------------------------------------------------
@@ -722,19 +722,12 @@ def main() -> None:
         n_skipped = 0
 
         for sample_idx, traj_path in enumerate(traj_files):
-            npz_path = _bands_output_path(
-                out_dir,
-                model_name,
-                t_label,
-                tb_canonical,
-                tb_t_label,
-                args.twist_angle,
-                sample_idx,
-            )
+            npz_path = _bands_output_path(out_dir, sample_idx)
+            existing = _existing_bands_npz(out_dir, sample_idx)
 
-            if os.path.isfile(npz_path):
+            if existing is not None:
                 print(
-                    f"  [skip] sample {sample_idx:04d} — {os.path.basename(npz_path)} exists",
+                    f"  [skip] sample {sample_idx:04d} — {os.path.basename(existing)} exists",
                     flush=True,
                 )
                 n_skipped += 1

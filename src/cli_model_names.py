@@ -48,6 +48,7 @@ _BARE_EXPANDABLE = frozenset(
     {
         "ACSF_hoppings",
         "ACSF_hoppings_sk",
+        "PODD3_energy",
         "POD_energy",
         "KC_energy",
         "TETB_POD",
@@ -93,13 +94,13 @@ def expand_ensemble_model_name(
 
     kw = dict(mcmc_kw or {})
 
-    if name in ("ACSF_hoppings", "ACSF_hoppings_sk", "POD_energy", "KC_energy"):
+    if name in ("ACSF_hoppings", "ACSF_hoppings_sk", "POD_energy", "PODD3_energy", "KC_energy"):
         pod_index = getattr(args, "pod_index", None)
-        if name == "POD_energy" and pod_index is not None:
+        if name in ("POD_energy", "PODD3_energy") and pod_index is not None:
             from blg_model_builder.pod_model_selection import pod_hyperparams_for_index
 
             _, _, pod_hash = pod_hyperparams_for_index(int(pod_index))
-            return f"POD_energy_POD_index_{int(pod_index)}_{pod_hash}"
+            return f"{name}_POD_index_{int(pod_index)}_{pod_hash}"
         return f"{name}_M_{int(args.M)}_W_{int(args.W)}"
 
     if name == "TETB_POD":

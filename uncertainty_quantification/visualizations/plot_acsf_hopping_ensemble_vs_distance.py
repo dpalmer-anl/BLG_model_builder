@@ -64,12 +64,35 @@ def load_ensemble_pkl(path: str) -> dict:
         return pickle.load(f)
 
 
-def default_ensemble_path(m: int, w: int, temperature: float) -> str:
-    file_str = f"ACSF_hoppings_M_{m}_W_{w}"
+def default_ensemble_path(
+    m: int,
+    w: int,
+    temperature: float,
+    *,
+    sk: bool = False,
+) -> str:
+    file_str = f"ACSF_hoppings_sk_M_{m}_W_{w}" if sk else f"ACSF_hoppings_M_{m}_W_{w}"
     return os.path.join(
         "ensembles",
         f"{file_str}",
         f"{file_str}_ensemble_T_{temperature}.pkl",
+    )
+
+
+def _pick_ypred_xdata(ensemble_dict: dict) -> tuple[dict, dict]:
+    """Prefer test-set predictions + distances (EMCEE default eval)."""
+    yp_test = ensemble_dict.get("ypred_samples_test")
+    if isinstance(yp_test, dict) and yp_test:
+        xd_test = ensemble_dict.get("xdata_test") or ensemble_dict.get("xdata")
+        if isinstance(xd_test, dict) and xd_test:
+            return yp_test, xd_test
+    yp = ensemble_dict.get("ypred_samples")
+    xd = ensemble_dict.get("xdata")
+    if isinstance(yp, dict) and yp and isinstance(xd, dict) and xd:
+        return yp, xd
+    raise KeyError(
+        "ensemble dict needs ypred_samples_test+xdata_test "
+        "or ypred_samples+xdata with hopping predictions."
     )
 
 
@@ -80,10 +103,9 @@ def plot_acsf_hopping_ensemble_vs_distance(
     outfile: str | None = None,
     show: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    if "ypred_samples" not in ensemble_dict or "xdata" not in ensemble_dict:
-        raise KeyError("ensemble dict must include 'ypred_samples' and 'xdata'.")
+    ypred_samples, xdata = _pick_ypred_xdata(ensemble_dict)
 
-    ypred = ensemble_dict["ypred_samples"].get("hopping")
+    ypred = ypred_samples.get("hopping")
     if ypred is None:
         raise KeyError('ypred_samples must contain key "hopping".')
 
@@ -91,7 +113,7 @@ def plot_acsf_hopping_ensemble_vs_distance(
     if Y.size == 0:
         raise ValueError("Empty hopping predictions in ensemble.")
 
-    dist = _bond_distances_from_xdata(ensemble_dict["xdata"])
+    dist = _bond_distances_from_xdata(xdata)
     n_bonds = Y.shape[1]
     if dist.size != n_bonds:
         L = int(min(dist.size, n_bonds))
@@ -155,6 +177,11 @@ def main() -> None:
     p.add_argument("--m", type=int, default=5, help="ACSF M (used with --w, --t if no --pkl)")
     p.add_argument("--w", type=int, default=1, help="ACSF W")
     p.add_argument(
+        "--sk",
+        action="store_true",
+        help="Use ACSF_hoppings_sk_* ensemble path (with --m/--w/--t).",
+    )
+    p.add_argument(
         "--t",
         type=float,
         default=1.0,
@@ -167,7 +194,9 @@ def main() -> None:
 
     path = args.pkl
     if path is None:
-        path = default_ensemble_path(args.m, args.w, args.temperature)
+        path = default_ensemble_path(
+            args.m, args.w, args.temperature, sk=args.sk,
+        )
     if not os.path.isfile(path):
         raise FileNotFoundError(path)
 

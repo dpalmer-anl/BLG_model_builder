@@ -152,6 +152,40 @@ def load_metrics_npz(path: str) -> Dict[str, Any]:
     return out
 
 
+def optimal_calibration_index(metrics: Dict[str, Any]) -> Optional[int]:
+    """Grid index that minimizes ``miscalibration_area`` among finite control values."""
+    cv = np.asarray(metrics["control_values"], dtype=float)
+    miscal = np.asarray(metrics["miscalibration_area"], dtype=float)
+    valid = np.isfinite(cv) & np.isfinite(miscal)
+    if not np.any(valid):
+        return None
+    return int(np.argmin(np.where(valid, miscal, np.inf)))
+
+
+def calibration_at_min_miscalibration(
+    model_name: str,
+    metrics_dir: str = DEFAULT_CALIBRATION_METRICS_DIR,
+    technique: str = "mcmc",
+    target: str = "energy",
+) -> Tuple[Optional[float], Optional[float]]:
+    """Return ``(control_value, nll)`` at the grid point minimizing miscalibration area."""
+    path = metrics_npz_path(metrics_dir, model_name, technique, target)
+    if not os.path.isfile(path):
+        return None, None
+    d = load_metrics_npz(path)
+    idx = optimal_calibration_index(d)
+    if idx is None:
+        return None, None
+    cv_arr = np.asarray(d["control_values"], dtype=float)
+    nll_arr = np.asarray(d["nll"], dtype=float)
+    cv = float(cv_arr[idx]) if idx < cv_arr.size else float("nan")
+    nll = float(nll_arr[idx]) if idx < nll_arr.size else float("nan")
+    return (
+        cv if np.isfinite(cv) else None,
+        nll if np.isfinite(nll) else None,
+    )
+
+
 def optimal_temperature_miscalibration(
     model_name: str,
     metrics_dir: str = DEFAULT_CALIBRATION_METRICS_DIR,
@@ -163,13 +197,10 @@ def optimal_temperature_miscalibration(
     if not os.path.isfile(path):
         return None
     d = load_metrics_npz(path)
-    cv = np.asarray(d["control_values"], dtype=float)
-    miscal = np.asarray(d["miscalibration_area"], dtype=float)
-    valid = np.isfinite(cv) & np.isfinite(miscal)
-    if not np.any(valid):
+    idx = optimal_calibration_index(d)
+    if idx is None:
         return None
-    idx = int(np.argmin(np.where(valid, miscal, np.inf)))
-    return float(cv[idx])
+    return float(np.asarray(d["control_values"], dtype=float)[idx])
 
 
 def resolve_ensemble_pickle(

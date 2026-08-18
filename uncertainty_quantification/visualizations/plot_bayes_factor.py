@@ -6,7 +6,14 @@ Computes (per control grid point: temperature *T* for MCMC, fraction *p* for Sub
 - ``model_partition_function`` — mean Boltzmann weight ``mean(exp(-SSE / (T * T0)))``
 - ``crps`` — continuous ranked probability score (ensemble predictive)
 - ``nll`` — mean Gaussian negative log-likelihood using ensemble mean / std
+  (raw per-point ensemble std; no relative σ floor)
+- ``likelihood`` — mean Gaussian likelihood
+  ``(2πσ)^(-1/2) exp(-(y-μ)²/σ²)`` using the same ensemble mean / std as NLL
+- ``loo_log_predictive_likelihood`` — LOO-CV mean log predictive density
+  ``(1/N) Σ_i log p(y_i | X, y_{-i})`` with Gaussian ``μ_i, σ_i`` from
+  ensemble members reweighted by fit to ``y_{-i}``
 - ``miscalibration_area`` — PIT-based QQ miscalibration (see ``miscalibration_area``; scaled ×4)
+- ``standardized_miscalibration_area`` — standardized-residual QQ miscalibration (``[-3,3]`` quantiles)
 
 Saves arrays to ``calibration_metrics/`` and can plot:
 
@@ -15,14 +22,29 @@ Saves arrays to ``calibration_metrics/`` and can plot:
   ``xdata['energy']``, same convention as PES parity; no shift to minimum
   reference energy)
 - Ensemble std vs per-point absolute error
+- PIT QQ plot (used for ``miscalibration_area``) and a separate standardized-residual
+  QQ plot (per-point ``(y - μ_i) / σ_i``; excludes near-zero ``σ_i``; not used for
+  miscalibration)
 - Metrics vs *T* or *p*, with optional overlay for several models on the same dataset type.
+- In ``--compare`` mode, **NLL** is shown as a bar chart at each model's control
+  value (temperature *T* or subsampling fraction *p*) that minimizes
+  ``miscalibration_area``; other metrics remain line plots.  Compare figures
+  are named ``<family>_compare_<metric>_…png`` (e.g.
+  ``POD_energy_POD_index_compare_crps_log_mcmc.png``).
+- With ``--plot-nll-hyperparams``, ``--plot-likelihood-hyperparams``, and/or
+  ``--plot-loo-hyperparams`` (and ``--plot-metrics``), additional figures plot
+  NLL, likelihood, and/or LOO log predictive likelihood at best calibration
+  vs hyperparameters (POD: vs 2-body radial count, **one figure per ``rcut``**;
+  ACSF: vs ``M``).
 
 When a pickle contains ``ypred_samples_test`` and ``ydata_test``, those are used
 for metrics and diagnostics (test split); otherwise the full/train fields are used.
 
 For ``--diagnostics`` with MCMC, use ``--temperatures <T>`` (first value) to select the
 nearest temperature on the current grid (works with ``--auto-discover``).  For
-subsamp, the first ``--p-values`` entry selects the nearest ``p``.
+subsamp, the first ``--p-values`` entry selects the nearest ``p``.  When neither
+``--temperatures``/``--p-values`` nor ``--diagnostic-index`` is set, the grid point
+with minimum ``miscalibration_area`` is used.
 
 Examples
 --------
@@ -47,6 +69,18 @@ Subsampling vs *p* (glob ``*_SubSamp_ensemble_p_*.pkl``)::
 
     python plot_bayes_factor.py --calculate --models ACSF_hoppings_M_10_W_4 \\
         --technique subsamp --target hopping --auto-discover
+
+NLL vs hyperparameters (POD 2-body radial; ACSF ``M`` at fixed ``W``)::
+
+    python plot_bayes_factor.py --plot-metrics --plot-nll-hyperparams --compare \\
+        --models 'POD_energy_POD_index*' 'ACSF_hoppings_sk_M_*_W_*' \\
+        --technique mcmc --target energy --auto-discover
+
+Likelihood vs hyperparameters (same layout as NLL)::
+
+    python plot_bayes_factor.py --plot-metrics --plot-likelihood-hyperparams --compare \\
+        --models 'POD_energy_POD_index*' 'ACSF_hoppings_sk_M_*_W_*' \\
+        --technique mcmc --target hopping --auto-discover
 """
 
 from __future__ import annotations
@@ -64,8 +98,41 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 import numpy as np
 import matplotlib.pyplot as plt
 
+CSFONT = {"fontname": "sans-serif", "size": 20}
+STANDARDIZED_QQ_LIM = 3.0
+plt.rcParams.update(
+    {
+        "font.family": CSFONT["fontname"],
+        "font.size": CSFONT["size"],
+        "axes.labelsize": CSFONT["size"],
+        "axes.titlesize": CSFONT["size"],
+        "legend.fontsize": CSFONT["size"],
+        "xtick.labelsize": CSFONT["size"],
+        "ytick.labelsize": CSFONT["size"],
+    }
+)
+
 HERE = Path(__file__).resolve().parent
 UQ_DIR = HERE.parent
+REPO_ROOT = UQ_DIR.parent
+
+_src = str(REPO_ROOT / "src")
+if _src not in sys.path:
+    sys.path.insert(0, _src)
+
+try:
+    from blg_model_builder.pod_model_selection import (
+        find_pod_energy_ensemble_folder,
+        pod_row_for_index,
+    )
+except ImportError:
+    find_pod_energy_ensemble_folder = None  # type: ignore[misc, assignment]
+    pod_row_for_index = None  # type: ignore[misc, assignment]
+
+# POD_energy hyperparameter grid (matches ``pod_hyperparameter_search.GRID``).
+_POD_TWO_BODY_RADIAL_GRID = list(range(6, 14, 1))
+_POD_THREE_BODY_RADIAL_GRID = (4, 6, 8, 10)
+_POD_THREE_BODY_ANGULAR_GRID = (4, 6, 8)
 
 # -----------------------------------------------------------------------------
 # Core metrics (NumPy)
@@ -116,6 +183,117 @@ def miscalibration_area(observations: np.ndarray, forecasts: np.ndarray) -> floa
     area = _trapz_yx(np.abs(u_sorted - uniform_quantiles), uniform_quantiles)
     return float(4.0 * area)
 
+
+def standardized_residual_qq_quantiles(
+    observations: np.ndarray,
+    forecasts: np.ndarray,
+    quantile_probs: Optional[np.ndarray] = None,
+    quantile_hi: float = 0.97,
+    sigma_rel_floor: float = 1e-3,
+    eps: float = 1e-12,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    """
+    QQ quantiles for per-point standardized ensemble and reference residuals.
+
+    At each observation *i*, ensemble members and the reference are centered on
+    the ensemble mean and scaled by the ensemble std at that site::
+
+        z_ij = (F_ij - μ_i) / σ_i ,   z_obs_i = (y_i - μ_i) / σ_i
+
+    Points with degenerate ensemble spread (``σ_i`` below a relative floor) are
+    excluded because standardization is ill-defined there and inflates ``z_obs``.
+
+    Returns quantiles of the pooled standardized ensemble (x-axis) and
+    standardized reference values (y-axis) at common interior probability
+    levels (default upper limit 0.97, as in ``qq_plot_example.py``).
+    """
+    observations = np.asarray(observations, dtype=float).ravel()
+    forecasts = np.asarray(forecasts, dtype=float)
+    if forecasts.ndim == 1:
+        forecasts = forecasts.reshape(1, -1)
+    if observations.size != forecasts.shape[0]:
+        raise ValueError(
+            "standardized_residual_qq_quantiles: obs length "
+            f"{observations.size} vs forecasts rows {forecasts.shape[0]}"
+        )
+    mu = np.mean(forecasts, axis=1)
+    sigma_raw = np.std(forecasts, axis=1, ddof=0)
+    positive = sigma_raw[sigma_raw > 0]
+    sigma_ref = float(np.median(positive)) if positive.size else 1.0
+    sigma_min = max(eps, sigma_rel_floor * sigma_ref)
+    valid = sigma_raw >= sigma_min
+    if not np.any(valid):
+        raise ValueError(
+            "standardized_residual_qq_quantiles: no observations with finite "
+            f"ensemble spread (sigma_min={sigma_min:g})"
+        )
+    sigma = np.maximum(sigma_raw[valid], sigma_min)
+    z_obs = (observations[valid] - mu[valid]) / sigma
+    z_ens = (forecasts[valid, :] - mu[valid, np.newaxis]) / sigma[:, np.newaxis]
+    if quantile_probs is None:
+        n_q = int(min(100, max(z_obs.size, 10)))
+        quantile_probs = np.linspace(0.0, quantile_hi, n_q)
+    else:
+        quantile_probs = np.asarray(quantile_probs, dtype=float)
+        quantile_probs = quantile_probs[
+            (quantile_probs >= 0.0) & (quantile_probs <= quantile_hi)
+        ]
+    if quantile_probs.size == 0:
+        raise ValueError("standardized_residual_qq_quantiles: empty quantile grid")
+    observed_q = np.quantile(z_obs, quantile_probs)
+    ensemble_q = np.quantile(z_ens.ravel(), quantile_probs)
+    n_excluded = int(observations.size - z_obs.size)
+    return ensemble_q, observed_q, quantile_probs, n_excluded
+
+
+def standardized_miscalibration_area(
+    observations: np.ndarray,
+    forecasts: np.ndarray,
+    qq_lim: float = STANDARDIZED_QQ_LIM,
+    quantile_hi: float = 0.97,
+    sigma_rel_floor: float = 1e-3,
+    eps: float = 1e-12,
+) -> float:
+    """
+    Area between the standardized-residual QQ curve and the diagonal.
+
+    Uses ``standardized_residual_qq_quantiles`` (same construction as the
+    diagnostic QQ plot), keeps only quantile pairs in ``[-qq_lim, qq_lim]``,
+    integrates ``|obs_q - ens_q|`` with respect to quantile probability, and
+    normalizes by ``2 * qq_lim`` so well-calibrated curves are O(1) on [0, 1].
+    """
+    observations = np.asarray(observations, dtype=float).ravel()
+    forecasts = np.asarray(forecasts, dtype=float)
+    if forecasts.ndim == 1:
+        forecasts = forecasts.reshape(1, -1)
+    n = observations.size
+    if n == 0 or forecasts.shape[0] != n:
+        return float("nan")
+    try:
+        ens_q, obs_q, probs, _ = standardized_residual_qq_quantiles(
+            observations,
+            forecasts,
+            quantile_hi=quantile_hi,
+            sigma_rel_floor=sigma_rel_floor,
+            eps=eps,
+        )
+    except ValueError:
+        return float("nan")
+    in_range = (
+        (ens_q >= -qq_lim)
+        & (ens_q <= qq_lim)
+        & (obs_q >= -qq_lim)
+        & (obs_q <= qq_lim)
+    )
+    ens_q = ens_q[in_range]
+    obs_q = obs_q[in_range]
+    probs = probs[in_range]
+    if probs.size < 2:
+        return float("nan")
+    area = _trapz_yx(np.abs(obs_q - ens_q), probs)
+    return float(area / (2.0 * qq_lim))
+
+
 def crps_ensemble(observations: np.ndarray, forecasts: np.ndarray) -> float:
     """
     CRPS for ensemble forecasts.
@@ -155,6 +333,210 @@ def mean_gaussian_nll(
         raise ValueError("NLL: y, mu, sigma must broadcast to same length")
     nll = 0.5 * np.log(2.0 * np.pi * sigma**2) + (y - mu) ** 2 / (2.0 * sigma**2)
     return float(np.mean(nll))
+
+
+def mean_gaussian_likelihood(
+    y: np.ndarray,
+    mu: np.ndarray,
+    sigma: np.ndarray,
+    eps: float = 1e-12,
+) -> float:
+    """Mean over observations of Gaussian likelihood with diagonal variance.
+
+    Per observation: ``(2πσ)^(-1/2) exp(-(y-μ)²/σ²)``.
+    Uses the same ``σ`` (ensemble predictive std) as ``mean_gaussian_nll``.
+
+    Computed in log-space (log-sum-exp) so tiny per-point values do not all
+    underflow to zero before averaging.  Non-finite inputs/outputs are mapped
+    with ``np.nan_to_num`` (NaN → 0).
+    """
+    y = np.nan_to_num(np.asarray(y, dtype=float).ravel(), nan=0.0, posinf=0.0, neginf=0.0)
+    mu = np.nan_to_num(np.asarray(mu, dtype=float).ravel(), nan=0.0, posinf=0.0, neginf=0.0)
+    sigma = np.maximum(
+        np.nan_to_num(np.asarray(sigma, dtype=float).ravel(), nan=eps, posinf=eps, neginf=eps),
+        eps,
+    )
+    if not (y.size == mu.size == sigma.size):
+        raise ValueError("likelihood: y, mu, sigma must broadcast to same length")
+    log_lik = -0.5 * np.log(2.0 * np.pi * sigma) - ((y - mu) ** 2) / (sigma**2)
+    log_lik = np.nan_to_num(log_lik, nan=-np.inf, posinf=0.0, neginf=-np.inf)
+    finite = np.isfinite(log_lik)
+    if not np.any(finite):
+        return 0.0
+    log_lik_f = log_lik[finite]
+    log_max = float(np.max(log_lik_f))
+    mean_lik = float(np.exp(log_max) * np.mean(np.exp(log_lik_f - log_max)))
+    return float(np.nan_to_num(mean_lik, nan=0.0, posinf=0.0, neginf=0.0))
+
+
+def _sanitize_likelihood(value: Any) -> float:
+    """Map non-finite likelihood scalars to zero for plotting and NPZ storage."""
+    return float(np.nan_to_num(float(value), nan=0.0, posinf=0.0, neginf=0.0))
+
+
+LOO_LOG_PREDICTIVE_KEY = "loo_log_predictive_likelihood"
+
+
+def mean_loo_gaussian_log_predictive_likelihood(
+    y: np.ndarray,
+    Y: np.ndarray,
+    eps: float = 1e-12,
+) -> float:
+    """LOO-CV mean log predictive density with diagonal Gaussian forecasts.
+
+    For each observation ``i``, ensemble members are reweighted by their
+    Gaussian likelihood on the reduced training targets ``y_{-i}`` (all
+    observations except ``i``).  The predictive mean ``μ_i`` and standard
+    deviation ``σ_i`` at ``i`` are the weighted moments of ``Y[:, i]``.
+    The per-point log score is
+
+    ``-½ log(σ_i²) - (y_i - μ_i)² / (2 σ_i²)``,
+
+    (no ``-½ log(2π)`` normalization constant), and the returned value is
+    ``(1/N) Σ_i`` of that expression.
+    """
+    y = np.nan_to_num(np.asarray(y, dtype=float).ravel(), nan=0.0, posinf=0.0, neginf=0.0)
+    Y = np.nan_to_num(np.asarray(Y, dtype=float), nan=0.0, posinf=0.0, neginf=0.0)
+    if Y.ndim != 2:
+        raise ValueError("LOO log predictive likelihood: Y must be 2D (n_ensemble, n_obs)")
+    n_obs = int(Y.shape[1])
+    if y.size != n_obs or n_obs < 2:
+        return float("nan")
+
+    resid = y[np.newaxis, :] - Y
+    sse_total = np.sum(resid**2, axis=1)
+    sse_minus_i = sse_total[:, np.newaxis] - resid**2
+
+    tau = float(np.std(y - np.mean(Y, axis=0)))
+    if not np.isfinite(tau) or tau <= 0.0:
+        tau = eps
+    tau = max(tau, eps)
+
+    log_w = -0.5 * sse_minus_i / (tau**2)
+    log_w_max = np.max(log_w, axis=0, keepdims=True)
+    w = np.exp(log_w - log_w_max)
+    w_sum = np.sum(w, axis=0, keepdims=True)
+    w = np.where(w_sum > 0.0, w / w_sum, 1.0 / float(Y.shape[0]))
+
+    mu = np.sum(w * Y, axis=0)
+    var = np.sum(w * (Y - mu) ** 2, axis=0)
+    sigma = np.maximum(np.sqrt(np.maximum(var, 0.0)), eps)
+
+    log_p = -0.5 * np.log(sigma**2) - (y - mu) ** 2 / (2.0 * sigma**2)
+    log_p = np.nan_to_num(log_p, nan=-np.inf, posinf=0.0, neginf=-np.inf)
+    finite = np.isfinite(log_p)
+    if not np.any(finite):
+        return float("nan")
+    return float(np.mean(log_p[finite]))
+
+
+_BOOTSTRAP_SAMPLE_FRACTION = 0.05
+_N_BOOTSTRAP_REPLICATES = 10
+_BOOTSTRAP_SEED = 0
+
+CALIBRATION_SCALAR_METRICS: Tuple[str, ...] = (
+    "mae",
+    "crps",
+    "nll",
+    "likelihood",
+    LOO_LOG_PREDICTIVE_KEY,
+    "miscalibration_area",
+    "standardized_miscalibration_area",
+    "model_partition_function",
+    "average_cost",
+    "std_cost",
+)
+
+
+def metric_std_key(metric: str) -> str:
+    """Bootstrap standard deviation column name for a scalar calibration metric."""
+    return f"{metric}_std"
+
+
+def _empty_calibration_scalar_metrics() -> Dict[str, float]:
+    out: Dict[str, float] = {}
+    for key in CALIBRATION_SCALAR_METRICS:
+        out[key] = float("nan")
+        out[metric_std_key(key)] = float("nan")
+    return out
+
+
+def _scalar_metrics_from_ensemble_matrix(
+    Y: np.ndarray,
+    y_ref: np.ndarray,
+    T_weight: float,
+    T0_ref: float,
+) -> Dict[str, float]:
+    """Scalar calibration metrics from one ensemble forecast matrix ``Y`` (n_members, n_obs)."""
+    mean_pred = np.mean(Y, axis=0)
+    y_std = np.std(Y, axis=0)
+    F = Y.T
+    diff = Y - y_ref
+    cost_val = np.sum(diff**2, axis=1)
+    return {
+        "mae": float(np.mean(np.abs(mean_pred - y_ref))),
+        "crps": crps_ensemble(y_ref, F),
+        "nll": mean_gaussian_nll(y_ref, mean_pred, y_std),
+        "likelihood": _sanitize_likelihood(
+            mean_gaussian_likelihood(y_ref, mean_pred, y_std),
+        ),
+        LOO_LOG_PREDICTIVE_KEY: mean_loo_gaussian_log_predictive_likelihood(y_ref, Y),
+        "miscalibration_area": miscalibration_area(y_ref, F),
+        "standardized_miscalibration_area": standardized_miscalibration_area(y_ref, F),
+        "model_partition_function": float(np.mean(np.exp(-cost_val / (T_weight * T0_ref)))),
+        "average_cost": float(np.mean(diff**2)),
+        "std_cost": float(np.std(diff**2)),
+    }
+
+
+def _bootstrap_calibration_scalar_metrics(
+    Y: np.ndarray,
+    y_ref: np.ndarray,
+    T_weight: float,
+    T0_ref: float,
+    *,
+    n_replicates: int = _N_BOOTSTRAP_REPLICATES,
+    fraction: float = _BOOTSTRAP_SAMPLE_FRACTION,
+) -> Tuple[Dict[str, float], Dict[str, float]]:
+    """Mean and std of scalar metrics over bootstrap subsamples of ensemble members."""
+    n_members = int(Y.shape[0])
+    if n_members <= 0:
+        empty = _empty_calibration_scalar_metrics()
+        return (
+            {k: empty[k] for k in CALIBRATION_SCALAR_METRICS},
+            {metric_std_key(k): empty[metric_std_key(k)] for k in CALIBRATION_SCALAR_METRICS},
+        )
+
+    if n_members == 1:
+        single = _scalar_metrics_from_ensemble_matrix(
+            Y, y_ref, T_weight, T0_ref,
+        )
+        return single, {metric_std_key(k): 0.0 for k in CALIBRATION_SCALAR_METRICS}
+
+    rng = np.random.default_rng(_BOOTSTRAP_SEED)
+    k = max(1, int(np.ceil(fraction * n_members)))
+    replicates = [
+        _scalar_metrics_from_ensemble_matrix(
+            Y[rng.choice(n_members, size=k, replace=False)],
+            y_ref,
+            T_weight,
+            T0_ref,
+        )
+        for _ in range(n_replicates)
+    ]
+
+    means: Dict[str, float] = {}
+    stds: Dict[str, float] = {}
+    for key in CALIBRATION_SCALAR_METRICS:
+        vals = np.array([rep[key] for rep in replicates], dtype=float)
+        means[key] = float(np.nanmean(vals))
+        n_finite = int(np.count_nonzero(np.isfinite(vals)))
+        stds[metric_std_key(key)] = (
+            float(np.nanstd(vals, ddof=1)) if n_finite > 1 else 0.0
+        )
+        if key == "likelihood":
+            means[key] = _sanitize_likelihood(means[key])
+    return means, stds
 
 
 def _flatten_reference_hoppings(y_hop: Union[list, np.ndarray]) -> np.ndarray:
@@ -269,6 +651,8 @@ def default_p_grid() -> np.ndarray:
 
 _RE_MCMC_T = re.compile(r"_ensemble_T_([^/]+)\.pkl$")
 _RE_SUB_P = re.compile(r"_SubSamp_ensemble_p_([^/]+)\.pkl$")
+_RE_POD_INDEX_LABEL = re.compile(r"^POD_energy_POD_index_(\d+)_", re.I)
+_RE_ACSF_MW = re.compile(r"^ACSF_hoppings(?:_sk)?_M_(\d+)_W_(\d+)$", re.I)
 
 
 def _similar_ensemble_folder_names(
@@ -373,6 +757,43 @@ def discover_subsamp_files(model_name: str, ensemble_dir: str = "ensembles") -> 
         out.append((p, path))
     out.sort(key=lambda x: x[0])
     return out
+
+
+def common_model_label(model_names: Sequence[str]) -> str:
+    """
+    Shared underscore-delimited prefix across ensemble folder names.
+
+    Examples
+    --------
+    >>> common_model_label([
+    ...     "POD_energy_POD_index_0_09fdb1c2",
+    ...     "POD_energy_POD_index_9_e5aa13cf",
+    ... ])
+    'POD_energy_POD_index'
+    >>> common_model_label([
+    ...     "ACSF_hoppings_sk_M_12_W_0",
+    ...     "ACSF_hoppings_sk_M_10_W_6",
+    ... ])
+    'ACSF_hoppings_sk'
+    """
+    names = [str(n).strip() for n in model_names if str(n).strip()]
+    if not names:
+        return ""
+    if len(names) == 1:
+        return names[0]
+    token_lists = [n.split("_") for n in names]
+    common: List[str] = []
+    for parts in zip(*token_lists):
+        if len(set(parts)) == 1:
+            common.append(parts[0])
+        else:
+            break
+    return "_".join(common) if common else names[0]
+
+
+def _safe_filename_slug(s: str) -> str:
+    """Filesystem-safe slug for model-family labels in figure names."""
+    return re.sub(r"[^\w.\-]+", "_", str(s)).strip("_")
 
 
 def load_ensemble_pickle(path: str) -> Dict[str, Any]:
@@ -527,6 +948,203 @@ def discover_control_grid(
     return control_values, paths, "p"
 
 
+def _paths_for_stored_control_grid(
+    model_name: str,
+    technique: str,
+    ensemble_root: str,
+    control_values: np.ndarray,
+    *,
+    auto_discover: bool,
+    temperatures: Optional[str],
+    p_values: Optional[str],
+    target: str,
+) -> List[Optional[str]]:
+    """Map each stored control value to its ensemble pickle path (or ``None``)."""
+    grid_cv, grid_paths, _ = discover_control_grid(
+        model_name,
+        technique,
+        ensemble_root,
+        auto_discover=auto_discover,
+        temperatures=temperatures,
+        p_values=p_values,
+        target=target,
+    )
+    path_by_cv = {float(cv): path for cv, path in zip(grid_cv, grid_paths)}
+    return [path_by_cv.get(float(cv)) for cv in np.asarray(control_values, dtype=float)]
+
+
+def npz_needs_metric_refresh(path: str, metric_key: str) -> bool:
+    """True when saved metrics lack a usable array for ``metric_key``."""
+    if not os.path.isfile(path):
+        return False
+    z = np.load(path, allow_pickle=True)
+    if metric_key not in z.files:
+        return True
+    values = np.asarray(z[metric_key], dtype=float)
+    return not np.any(np.isfinite(values))
+
+
+def npz_needs_likelihood_refresh(path: str) -> bool:
+    """Backward-compatible wrapper for likelihood column refresh checks."""
+    return npz_needs_metric_refresh(path, "likelihood")
+
+
+def npz_needs_bootstrap_std_refresh(path: str) -> bool:
+    """True when saved metrics lack bootstrap standard-deviation columns."""
+    if not os.path.isfile(path):
+        return False
+    z = np.load(path, allow_pickle=True)
+    for key in CALIBRATION_SCALAR_METRICS:
+        if metric_std_key(key) not in z.files:
+            return True
+    return False
+
+
+def refresh_metric_column_in_npz(
+    model_name: str,
+    technique: str,
+    target: str,
+    metrics_path: str,
+    metric_key: str,
+    *,
+    ensemble_root: str,
+    auto_discover: bool,
+    temperatures: Optional[str],
+    p_values: Optional[str],
+    no_t0_fit: bool,
+    z_reference_temperature: float,
+    sanitize: Optional[Any] = None,
+) -> bool:
+    """Fill or replace one metric column in an existing calibration NPZ."""
+    if not os.path.isfile(metrics_path):
+        return False
+
+    z = np.load(metrics_path, allow_pickle=True)
+    control_values = np.asarray(z["control_values"], dtype=float)
+    paths = _paths_for_stored_control_grid(
+        model_name,
+        technique,
+        ensemble_root,
+        control_values,
+        auto_discover=auto_discover,
+        temperatures=temperatures,
+        p_values=p_values,
+        target=target,
+    )
+    if not any(p and os.path.isfile(p) for p in paths):
+        print(
+            f"Cannot refresh {metric_key} in {metrics_path}: no ensemble pickles.",
+            file=sys.stderr,
+        )
+        return False
+
+    meta = json.loads(str(z["meta_json"][()]))
+    T0_ref = float(meta.get("T0_ref", 1.0))
+    if not no_t0_fit:
+        T0_ref = resolve_T0_ref(model_name, target, ensemble_root)
+
+    values = np.full(control_values.size, np.nan, dtype=float)
+    std_key = metric_std_key(metric_key)
+    std_values = np.full(control_values.size, np.nan, dtype=float)
+    n_ok = 0
+    for i, (cv, path) in enumerate(zip(control_values, paths)):
+        if path is None or not os.path.isfile(path):
+            continue
+        T_for_z = float(cv) if technique == "mcmc" else float(z_reference_temperature)
+        try:
+            m = compute_metrics_one_file(path, target, technique, T_for_z, T0_ref)
+            val = m[metric_key]
+            if sanitize is not None:
+                val = sanitize(val)
+            values[i] = float(val)
+            std_values[i] = float(m.get(std_key, np.nan))
+            n_ok += 1
+        except Exception as exc:
+            print(
+                f"  skip {metric_key} refresh {os.path.basename(path)}: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+
+    if n_ok == 0:
+        print(f"No {metric_key} values refreshed for {metrics_path}", file=sys.stderr)
+        return False
+
+    skip_keys = {metric_key, std_key}
+    arrays = {key: np.asarray(z[key]) for key in z.files if key not in skip_keys}
+    if metric_key == "likelihood":
+        arrays[metric_key] = np.nan_to_num(values, nan=0.0, posinf=0.0, neginf=0.0)
+    else:
+        arrays[metric_key] = values
+    arrays[std_key] = std_values
+    np.savez_compressed(metrics_path, **arrays)
+    print(
+        f"Refreshed {metric_key} in {metrics_path} "
+        f"({n_ok}/{control_values.size} grid points)",
+        flush=True,
+    )
+    return True
+
+
+def refresh_likelihood_in_npz(
+    model_name: str,
+    technique: str,
+    target: str,
+    metrics_path: str,
+    *,
+    ensemble_root: str,
+    auto_discover: bool,
+    temperatures: Optional[str],
+    p_values: Optional[str],
+    no_t0_fit: bool,
+    z_reference_temperature: float,
+) -> bool:
+    """Fill or replace the ``likelihood`` column in an existing calibration NPZ."""
+    return refresh_metric_column_in_npz(
+        model_name,
+        technique,
+        target,
+        metrics_path,
+        "likelihood",
+        ensemble_root=ensemble_root,
+        auto_discover=auto_discover,
+        temperatures=temperatures,
+        p_values=p_values,
+        no_t0_fit=no_t0_fit,
+        z_reference_temperature=z_reference_temperature,
+        sanitize=_sanitize_likelihood,
+    )
+
+
+def refresh_loo_log_predictive_likelihood_in_npz(
+    model_name: str,
+    technique: str,
+    target: str,
+    metrics_path: str,
+    *,
+    ensemble_root: str,
+    auto_discover: bool,
+    temperatures: Optional[str],
+    p_values: Optional[str],
+    no_t0_fit: bool,
+    z_reference_temperature: float,
+) -> bool:
+    """Fill or replace the LOO log predictive likelihood column in a calibration NPZ."""
+    return refresh_metric_column_in_npz(
+        model_name,
+        technique,
+        target,
+        metrics_path,
+        LOO_LOG_PREDICTIVE_KEY,
+        ensemble_root=ensemble_root,
+        auto_discover=auto_discover,
+        temperatures=temperatures,
+        p_values=p_values,
+        no_t0_fit=no_t0_fit,
+        z_reference_temperature=z_reference_temperature,
+    )
+
+
 def ensure_metrics_npz(
     model_name: str,
     technique: str,
@@ -543,6 +1161,52 @@ def ensure_metrics_npz(
     """Create calibration metrics NPZ from ensemble pickles if it is missing."""
     out = metrics_npz_path(metrics_dir, model_name, technique, target)
     if os.path.isfile(out):
+        refresh_kwargs = dict(
+            ensemble_root=ensemble_root,
+            auto_discover=auto_discover,
+            temperatures=temperatures,
+            p_values=p_values,
+            no_t0_fit=no_t0_fit,
+            z_reference_temperature=z_reference_temperature,
+        )
+        if npz_needs_bootstrap_std_refresh(out):
+            print(
+                f"Refreshing bootstrap metric uncertainties in {out} …",
+                flush=True,
+            )
+            control_values, paths, control_name = discover_control_grid(
+                model_name,
+                technique,
+                ensemble_root,
+                auto_discover=auto_discover,
+                temperatures=temperatures,
+                p_values=p_values,
+                target=target,
+            )
+            if control_values.size > 0 and any(os.path.isfile(p) for p in paths):
+                T0_ref = 1.0 if no_t0_fit else resolve_T0_ref(
+                    model_name, target, ensemble_root,
+                )
+                run_calculate(
+                    model_name,
+                    technique,
+                    target,
+                    control_values,
+                    paths,
+                    control_name,
+                    T0_ref,
+                    metrics_dir,
+                    z_reference_temperature,
+                )
+            return out if os.path.isfile(out) else None
+        if npz_needs_likelihood_refresh(out):
+            refresh_likelihood_in_npz(
+                model_name, technique, target, out, **refresh_kwargs,
+            )
+        if npz_needs_metric_refresh(out, LOO_LOG_PREDICTIVE_KEY):
+            refresh_loo_log_predictive_likelihood_in_npz(
+                model_name, technique, target, out, **refresh_kwargs,
+            )
         return out
 
     control_values, paths, control_name = discover_control_grid(
@@ -593,14 +1257,9 @@ def _metrics_hopping(
     y_flat = _flatten_reference_hoppings(ydata[key])
     Y = _ensemble_predictions_to_matrix(ypred_samples[key])
     if Y.ndim != 2 or Y.shape[1] == 0:
+        empty = _empty_calibration_scalar_metrics()
         return {
-            "mae": np.nan,
-            "crps": np.nan,
-            "nll": np.nan,
-            "miscalibration_area": np.nan,
-            "model_partition_function": np.nan,
-            "average_cost": np.nan,
-            "std_cost": np.nan,
+            **empty,
             "y_ref": y_flat,
             "y_mean": None,
             "y_std": None,
@@ -608,26 +1267,23 @@ def _metrics_hopping(
         }
     if y_flat.size != Y.shape[1]:
         L = int(min(y_flat.size, Y.shape[1]))
+        print(
+            f"  Warning: hopping reference length {y_flat.size} != "
+            f"ensemble width {Y.shape[1]}; truncating to {L}",
+            file=sys.stderr,
+            flush=True,
+        )
         y_flat = y_flat[:L]
         Y = Y[:, :L]
     mean_pred = np.mean(Y, axis=0)
     y_std = np.std(Y, axis=0)
-    mae = float(np.mean(np.abs(mean_pred - y_flat)))
+    scalars, scalar_stds = _bootstrap_calibration_scalar_metrics(
+        Y, y_flat, T_weight, T0_ref,
+    )
     F = Y.T
-    crps = crps_ensemble(y_flat, F)
-    nll = mean_gaussian_nll(y_flat, mean_pred, y_std)
-    miscal = miscalibration_area(y_flat, F)
-    diff = Y - y_flat
-    cost_val = np.sum(diff**2, axis=1)
-    Z = float(np.mean(np.exp(-cost_val / (T_weight * T0_ref))))
     return {
-        "mae": mae,
-        "crps": crps,
-        "nll": nll,
-        "miscalibration_area": miscal,
-        "model_partition_function": Z,
-        "average_cost": float(np.mean(diff**2)),
-        "std_cost": float(np.std(diff**2)),
+        **scalars,
+        **scalar_stds,
         "y_ref": y_flat,
         "y_mean": mean_pred,
         "y_std": y_std,
@@ -690,14 +1346,9 @@ def _metrics_energy(
             n_x = len(xv0)
     L = int(min(ye.size, yp.shape[1], n_x)) if n_x else int(min(ye.size, yp.shape[1]))
     if L <= 0:
+        empty = _empty_calibration_scalar_metrics()
         return {
-            "mae": np.nan,
-            "crps": np.nan,
-            "nll": np.nan,
-            "miscalibration_area": np.nan,
-            "model_partition_function": np.nan,
-            "average_cost": np.nan,
-            "std_cost": np.nan,
+            **empty,
             "y_ref": np.array([], dtype=float),
             "y_mean": None,
             "y_std": None,
@@ -717,21 +1368,13 @@ def _metrics_energy(
     ydata_per_atom = ye / nat
     mean_pred = np.mean(ypred_per_atom, axis=0)
     y_std = np.std(ypred_per_atom, axis=0)
-    mae = float(np.mean(np.abs(mean_pred - ydata_per_atom)))
+    scalars, scalar_stds = _bootstrap_calibration_scalar_metrics(
+        ypred_per_atom, ydata_per_atom, T_weight, T0_ref,
+    )
     F = ypred_per_atom.T
-    crps = crps_ensemble(ydata_per_atom, F)
-    nll = mean_gaussian_nll(ydata_per_atom, mean_pred, y_std)
-    miscal = miscalibration_area(ydata_per_atom, F)
-    cost_val = np.sum((ypred_per_atom - ydata_per_atom) ** 2, axis=1)
-    Z = float(np.mean(np.exp(-cost_val / (T_weight * T0_ref))))
     return {
-        "mae": mae,
-        "crps": crps,
-        "nll": nll,
-        "miscalibration_area": miscal,
-        "model_partition_function": Z,
-        "average_cost": float(np.mean((ypred_per_atom - ydata_per_atom) ** 2)),
-        "std_cost": float(np.std((ypred_per_atom - ydata_per_atom) ** 2)),
+        **scalars,
+        **scalar_stds,
         "y_ref": ydata_per_atom,
         "y_mean": mean_pred,
         "y_std": y_std,
@@ -811,13 +1454,10 @@ def run_calculate(
 ) -> str:
     """Compute metrics along the grid and save compressed NPZ. Returns output path."""
     n = len(control_values)
-    mae = np.full(n, np.nan)
-    crps = np.full(n, np.nan)
-    nll = np.full(n, np.nan)
-    miscal = np.full(n, np.nan)
-    Z = np.full(n, np.nan)
-    avg_cost = np.full(n, np.nan)
-    std_cost = np.full(n, np.nan)
+    metric_arrays: Dict[str, np.ndarray] = {}
+    for key in CALIBRATION_SCALAR_METRICS:
+        metric_arrays[key] = np.full(n, np.nan, dtype=float)
+        metric_arrays[metric_std_key(key)] = np.full(n, np.nan, dtype=float)
 
     for i, (cv, path) in enumerate(zip(control_values, paths_by_control)):
         if not os.path.isfile(path):
@@ -835,13 +1475,12 @@ def run_calculate(
                 file=sys.stderr,
             )
             continue
-        mae[i] = m["mae"]
-        crps[i] = m["crps"]
-        nll[i] = m["nll"]
-        miscal[i] = m["miscalibration_area"]
-        Z[i] = m["model_partition_function"]
-        avg_cost[i] = m["average_cost"]
-        std_cost[i] = m["std_cost"]
+        for key in CALIBRATION_SCALAR_METRICS:
+            val = m[key]
+            if key == "likelihood":
+                val = _sanitize_likelihood(val)
+            metric_arrays[key][i] = val
+            metric_arrays[metric_std_key(key)][i] = m.get(metric_std_key(key), np.nan)
 
     out = metrics_npz_path(metrics_dir, model_name, technique, target)
     os.makedirs(metrics_dir, exist_ok=True)
@@ -853,21 +1492,87 @@ def run_calculate(
         "T0_ref": float(T0_ref),
         "z_reference_temperature": float(z_reference_temperature),
     }
-    np.savez_compressed(
-        out,
-        control_values=control_values.astype(float),
-        control_name=np.array(control_name),
-        mae=mae,
-        crps=crps,
-        nll=nll,
-        miscalibration_area=miscal,
-        model_partition_function=Z,
-        average_cost=avg_cost,
-        std_cost=std_cost,
-        meta_json=np.array(json.dumps(meta)),
-    )
+    save_payload: Dict[str, Any] = {
+        "control_values": control_values.astype(float),
+        "control_name": np.array(control_name),
+        "meta_json": np.array(json.dumps(meta)),
+    }
+    for key in CALIBRATION_SCALAR_METRICS:
+        save_payload[key] = metric_arrays[key]
+        save_payload[metric_std_key(key)] = metric_arrays[metric_std_key(key)]
+    np.savez_compressed(out, **save_payload)
     print(f"Wrote {out}")
     return out
+
+
+def _miscalibration_on_discovered_grid(
+    control_values: np.ndarray,
+    paths_by_control: Sequence[str],
+    technique: str,
+    target: str,
+    T0_ref: float,
+    z_reference_temperature: float,
+    metrics_path: Optional[str] = None,
+) -> np.ndarray:
+    """Per-grid-point miscalibration area aligned with ``control_values``."""
+    cv = np.asarray(control_values, dtype=float)
+    n = int(cv.size)
+    miscal = np.full(n, np.nan, dtype=float)
+    if metrics_path and os.path.isfile(metrics_path):
+        d = load_metrics_npz(metrics_path)
+        cv_saved = np.asarray(d["control_values"], dtype=float)
+        miscal_saved = np.asarray(d["miscalibration_area"], dtype=float)
+        from_saved = True
+        for i, c in enumerate(cv):
+            hits = np.where(np.isclose(cv_saved, c, rtol=0.0, atol=1e-6))[0]
+            if hits.size != 1:
+                from_saved = False
+                break
+            miscal[i] = miscal_saved[hits[0]]
+        if from_saved and np.any(np.isfinite(miscal)):
+            return miscal
+        miscal[:] = np.nan
+
+    for i, (c, path) in enumerate(zip(cv, paths_by_control)):
+        if not os.path.isfile(path):
+            continue
+        T_for_z = float(c) if technique == "mcmc" else float(z_reference_temperature)
+        try:
+            m = compute_metrics_one_file(path, target, technique, T_for_z, T0_ref)
+            miscal[i] = m["miscalibration_area"]
+        except Exception as exc:
+            print(
+                f"  [diagnostics] skip {os.path.basename(path)}: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+    return miscal
+
+
+def _index_min_miscalibration(
+    control_values: np.ndarray,
+    paths_by_control: Sequence[str],
+    technique: str,
+    target: str,
+    T0_ref: float,
+    z_reference_temperature: float,
+    metrics_path: Optional[str] = None,
+) -> Optional[int]:
+    """Grid index with smallest finite miscalibration area on the discovered grid."""
+    cv = np.asarray(control_values, dtype=float)
+    miscal = _miscalibration_on_discovered_grid(
+        cv,
+        paths_by_control,
+        technique,
+        target,
+        T0_ref,
+        z_reference_temperature,
+        metrics_path=metrics_path,
+    )
+    valid = np.isfinite(cv) & np.isfinite(miscal)
+    if not np.any(valid):
+        return None
+    return int(np.argmin(np.where(valid, miscal, np.inf)))
 
 
 def _resolve_diagnostic_index(
@@ -876,14 +1581,21 @@ def _resolve_diagnostic_index(
     temperatures_arg: Optional[str],
     p_values_arg: Optional[str],
     diagnostic_index_arg: Optional[int],
+    *,
+    paths_by_control: Optional[Sequence[str]] = None,
+    target: Optional[str] = None,
+    T0_ref: float = 1.0,
+    z_reference_temperature: float = 1.0,
+    metrics_path: Optional[str] = None,
 ) -> int:
     """Pick grid index for ``--diagnostics``.
 
     For MCMC, if ``--temperatures`` parses to at least one float, the first
     value selects the closest ``T`` in ``control_values`` (overrides
     ``--diagnostic-index``).  For ``subsamp``, the same applies to the first
-    value in ``--p-values``.  Otherwise use ``diagnostic_index_arg`` or the
-    middle of the grid.
+    value in ``--p-values``.  Otherwise use ``diagnostic_index_arg`` if set,
+    else the grid point with minimum ``miscalibration_area``, else the middle
+    of the grid.
     """
     cv = np.asarray(control_values, dtype=float)
     n = int(cv.size)
@@ -901,6 +1613,22 @@ def _resolve_diagnostic_index(
             return int(np.argmin(np.abs(cv - p_req)))
     if diagnostic_index_arg is not None:
         return int(np.clip(int(diagnostic_index_arg), 0, n - 1))
+    if (
+        paths_by_control is not None
+        and target is not None
+        and len(paths_by_control) == n
+    ):
+        idx = _index_min_miscalibration(
+            cv,
+            paths_by_control,
+            technique,
+            target,
+            T0_ref,
+            z_reference_temperature,
+            metrics_path=metrics_path,
+        )
+        if idx is not None:
+            return idx
     return n // 2
 
 
@@ -916,7 +1644,7 @@ def run_diagnostics_plots(
     z_reference_temperature: float,
     diagnostic_index: Optional[int] = None,
 ) -> None:
-    """Parity, QQ (``qq_plot_example`` style), and std vs |error| at one grid point."""
+    """Parity, PIT QQ, standardized-residual QQ, and std vs |error| at one grid point."""
     if diagnostic_index is None:
         diagnostic_index = len(control_values) // 2
     diagnostic_index = int(np.clip(diagnostic_index, 0, len(control_values) - 1))
@@ -975,26 +1703,70 @@ def run_diagnostics_plots(
 
     F = m.get("forecasts")
     p3 = None
+    p4 = None
     if F is not None and np.asarray(F).size > 0:
         u = pit_values(y_ref, F)
         u_sorted = np.sort(u)
         n_u = u_sorted.size
         uniform_quantiles = np.linspace(0.0, 1.0, n_u)
-        plt.figure(figsize=(6, 5))
-        plt.plot(uniform_quantiles, u_sorted, "o", ms=3, alpha=0.7, label="QQ")
-        plt.plot([0, 1], [0, 1], "k--", lw=1, label="Ideal")
-        plt.xlabel("Uniform quantiles")
-        plt.ylabel("Empirical quantiles")
-        plt.title(f"QQ — {model_name} ({target}) {control_name}={cv:g}")
-        plt.legend()
-        plt.tight_layout()
+        fig, ax = plt.subplots(figsize=(6, 5))
+        ax.plot(uniform_quantiles, u_sorted, "o", ms=3, alpha=0.7, label="QQ")
+        ax.plot([0, 1], [0, 1], "k--", lw=1, label="ideal")
+        ax.fill_between(
+            uniform_quantiles,
+            uniform_quantiles,
+            u_sorted,
+            alpha=0.25,
+            color="C0",
+            linewidth=0,
+        )
+        ax.set_xlabel("Uniform quantiles", fontdict=CSFONT)
+        ax.set_ylabel("empirical quantiles", fontdict=CSFONT)
+        ax.legend(prop={"family": CSFONT["fontname"], "size": CSFONT["size"]})
+        fig.tight_layout()
         p3 = os.path.join(sub, f"{model_name}_{ctrl_tag}_pit_qq.png")
-        plt.savefig(p3, dpi=150)
-        plt.close()
+        fig.savefig(p3, dpi=150)
+        plt.close(fig)
+
+        ens_q, obs_q, _, n_excl = standardized_residual_qq_quantiles(y_ref, F)
+        if n_excl:
+            print(
+                f"  standardized QQ: excluded {n_excl}/{y_ref.size} points "
+                "with degenerate ensemble spread",
+                file=sys.stderr,
+            )
+        qq_lim = STANDARDIZED_QQ_LIM
+        in_range = (
+            (ens_q >= -qq_lim)
+            & (ens_q <= qq_lim)
+            & (obs_q >= -qq_lim)
+            & (obs_q <= qq_lim)
+        )
+        ens_q_plot = ens_q[in_range]
+        obs_q_plot = obs_q[in_range]
+        fig, ax = plt.subplots(figsize=(6, 5))
+        ax.plot(ens_q_plot, obs_q_plot, "o", ms=3, alpha=0.7, label="QQ")
+        lims = np.linspace(-qq_lim, qq_lim, 50)
+        ax.plot(lims, lims, "k--", lw=1, label="ideal")
+        if ens_q_plot.size > 0:
+            ax.fill_between(
+                ens_q_plot, ens_q_plot, obs_q_plot, alpha=0.25, color="C0", linewidth=0
+            )
+        ax.set_xlim(-qq_lim, qq_lim)
+        ax.set_ylim(-qq_lim, qq_lim)
+        ax.set_xlabel("ensemble standardized quantiles", fontdict=CSFONT)
+        ax.set_ylabel("empirical quantiles", fontdict=CSFONT)
+        ax.legend(prop={"family": CSFONT["fontname"], "size": CSFONT["size"]})
+        fig.tight_layout()
+        p4 = os.path.join(sub, f"{model_name}_{ctrl_tag}_standardized_residual_qq.png")
+        fig.savefig(p4, dpi=150)
+        plt.close(fig)
 
     lines = [f"           {p1}", f"           {p2}"]
     if p3:
         lines.append(f"           {p3}")
+    if p4:
+        lines.append(f"           {p4}")
     print("Diagnostics:\n" + "\n".join(lines))
 
 
@@ -1008,22 +1780,45 @@ def load_metrics_npz(path: str) -> Dict[str, Any]:
     meta = json.loads(str(z["meta_json"][()]))
     n = int(np.asarray(z["control_values"]).size)
     nan_vec = np.full(n, np.nan, dtype=float)
+    zero_vec = np.zeros(n, dtype=float)
     out: Dict[str, Any] = {
         "control_values": np.asarray(z["control_values"]),
-        "mae": np.asarray(z["mae"]),
-        "crps": np.asarray(z["crps"]),
-        "nll": np.asarray(z["nll"]),
-        "model_partition_function": np.asarray(z["model_partition_function"]),
         "meta": meta,
     }
-    if "miscalibration_area" in z.files:
-        out["miscalibration_area"] = np.asarray(z["miscalibration_area"])
-    else:
-        out["miscalibration_area"] = nan_vec
+    for key in CALIBRATION_SCALAR_METRICS:
+        if key in z.files:
+            arr = np.asarray(z[key], dtype=float)
+            if key == "likelihood":
+                arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+            out[key] = arr
+        elif key == "likelihood":
+            out[key] = zero_vec.copy()
+        else:
+            out[key] = nan_vec.copy()
+        std_key = metric_std_key(key)
+        if std_key in z.files:
+            out[std_key] = np.asarray(z[std_key], dtype=float)
+        else:
+            out[std_key] = zero_vec.copy()
     return out
 
 
 DEFAULT_CALIBRATION_METRICS_DIR = "calibration_metrics"
+
+
+def optimal_calibration_index(metrics: Dict[str, np.ndarray]) -> Optional[int]:
+    """
+    Grid index that minimizes ``miscalibration_area`` among finite control values.
+
+    Ensemble selection (compare bars, hyperparameter NLL plots,
+    ``resolve_ensemble_pickle``) always uses this index — never min-NLL.
+    """
+    cv = np.asarray(metrics["control_values"], dtype=float)
+    miscal = np.asarray(metrics["miscalibration_area"], dtype=float)
+    valid = np.isfinite(cv) & np.isfinite(miscal)
+    if not np.any(valid):
+        return None
+    return int(np.argmin(np.where(valid, miscal, np.inf)))
 
 
 def optimal_temperature_miscalibration(
@@ -1033,7 +1828,8 @@ def optimal_temperature_miscalibration(
     target: str = "energy",
 ) -> Optional[float]:
     """
-    Temperature *T* that minimizes ``miscalibration_area`` on the saved calibration grid.
+    Temperature *T* (or subsampling fraction *p*) that minimizes
+    ``miscalibration_area`` on the saved calibration grid.
 
     Reads ``calibration_metrics/calibration_<model>_<technique>_<target>.npz``
     (from ``plot_bayes_factor.py --calculate``).  Returns ``None`` if the file is
@@ -1043,13 +1839,995 @@ def optimal_temperature_miscalibration(
     if not os.path.isfile(path):
         return None
     d = load_metrics_npz(path)
+    idx = optimal_calibration_index(d)
+    if idx is None:
+        return None
+    return float(np.asarray(d["control_values"], dtype=float)[idx])
+
+
+def metrics_at_min_miscalibration(path: str) -> Tuple[float, float, float, float]:
+    """
+    Return ``(control_value, miscalibration_area, nll, nll_bootstrap_std)`` at the
+    grid point with the smallest finite miscalibration area.
+    """
+    return metric_at_min_miscalibration(path, "nll")
+
+
+def metric_at_min_miscalibration(path: str, metric: str) -> Tuple[float, float, float, float]:
+    """
+    Return ``(control_value, miscalibration_area, metric_value, metric_bootstrap_std)``
+    at the grid point with the smallest finite miscalibration area.
+    """
+    d = load_metrics_npz(path)
+    idx = optimal_calibration_index(d)
+    if idx is None:
+        return float("nan"), float("nan"), float("nan"), float("nan")
     cv = np.asarray(d["control_values"], dtype=float)
     miscal = np.asarray(d["miscalibration_area"], dtype=float)
-    valid = np.isfinite(cv) & np.isfinite(miscal)
-    if not np.any(valid):
+    values = np.asarray(d[metric], dtype=float)
+    std_values = np.asarray(d.get(metric_std_key(metric), np.zeros_like(values)), dtype=float)
+    val = float(values[idx]) if idx < values.size else float("nan")
+    std_val = float(std_values[idx]) if idx < std_values.size else float("nan")
+    if metric == "likelihood":
+        val = _sanitize_likelihood(val)
+    elif not np.isfinite(val):
+        val = float("nan")
+    if not np.isfinite(std_val):
+        std_val = float("nan")
+    return float(cv[idx]), float(miscal[idx]), val, std_val
+
+
+def format_compare_bar_label(model_name: str, family_label: str) -> str:
+    """Bar-tick label ``family (POD-index)`` for POD models."""
+    m = _RE_POD_INDEX_LABEL.match(model_name)
+    if m:
+        return f"{family_label} ({m.group(1)})"
+    mw = _RE_ACSF_MW.match(model_name)
+    if mw:
+        return f"{family_label} (M={mw.group(1)}, W={mw.group(2)})"
+    return model_name
+
+
+def _pod_hyperparam_search_dir() -> Path:
+    """POD hyperparameter-search artifacts (anchored to UQ dir, not CWD)."""
+    return UQ_DIR / "pod_hyperparam_search"
+
+
+def _pod_search_csv_paths() -> List[Path]:
+    d = _pod_hyperparam_search_dir()
+    out: List[Path] = []
+    for name in (
+        "pod_hyperparam_search.csv",
+        "pod_hyperparam_search_results_tightened.csv",
+        "pod_hyperparam_search_results.csv",
+    ):
+        p = d / name
+        if p.is_file():
+            out.append(p)
+    return out
+
+
+def _load_pod_search_dataframe() -> Optional[Any]:
+    """Pandas DataFrame of POD hyperparameter-search results (tightened CSV first)."""
+    try:
+        import pandas as pd
+    except ImportError:
         return None
-    idx = int(np.argmin(np.where(valid, miscal, np.inf)))
-    return float(cv[idx])
+    for path in _pod_search_csv_paths():
+        try:
+            return pd.read_csv(path)
+        except Exception as exc:
+            print(f"Warning: could not read {path}: {exc}", file=sys.stderr, flush=True)
+    return None
+
+
+def _pod_index_from_model_name(model_name: str) -> int:
+    m = _RE_POD_INDEX_LABEL.match(model_name)
+    return int(m.group(1)) if m else 10**9
+
+
+def _pod_valid_two_body_radial_values(
+    three_body_radial: int,
+    three_body_angular: int,
+) -> List[int]:
+    """Valid 2-body radial counts for a fixed (n3r, n3a) slice of the POD grid."""
+    out: List[int] = []
+    for n2 in _POD_TWO_BODY_RADIAL_GRID:
+        if three_body_radial > n2:
+            continue
+        if three_body_angular > three_body_radial:
+            continue
+        out.append(int(n2))
+    return out
+
+
+def _pod_valid_hyperparameter_groups() -> List[Tuple[int, int]]:
+    """All valid (three_body_radial, three_body_angular) pairs from the POD grid."""
+    groups: List[Tuple[int, int]] = []
+    for n3r in _POD_THREE_BODY_RADIAL_GRID:
+        for n3a in _POD_THREE_BODY_ANGULAR_GRID:
+            if _pod_valid_two_body_radial_values(n3r, n3a):
+                groups.append((int(n3r), int(n3a)))
+    return groups
+
+
+def discover_pod_energy_models_from_search(
+    ensemble_dir: str = "ensembles",
+) -> List[str]:
+    """
+    Map every row of the tightened POD search CSV to an ensemble folder name.
+
+    Uses ``find_pod_energy_ensemble_folder`` so models are not dropped when
+    ``--models POD_energy_POD_index*`` glob expansion is incomplete.
+    """
+    if find_pod_energy_ensemble_folder is None:
+        return []
+    df = _load_pod_search_dataframe()
+    if df is None or len(df) == 0:
+        return []
+    names: List[str] = []
+    missing = 0
+    for pod_idx, row in df.iterrows():
+        folder = find_pod_energy_ensemble_folder(
+            str(row["hash"]),
+            ensemble_dir,
+            pod_index=int(pod_idx),
+        )
+        if folder is None:
+            missing += 1
+            continue
+        names.append(folder)
+    if missing:
+        print(
+            f"  Warning: {missing}/{len(df)} POD search CSV row(s) have no ensemble "
+            f"folder under {ensemble_dir!r}",
+            file=sys.stderr,
+            flush=True,
+        )
+    return names
+
+
+def expand_pod_energy_hyperparam_models(
+    models: Sequence[str],
+    ensemble_dir: str = "ensembles",
+) -> List[str]:
+    """Union CLI model list with every POD_energy folder indexed by the search CSV."""
+    if not any(name.startswith("POD_energy") for name in models):
+        return list(models)
+    discovered = discover_pod_energy_models_from_search(ensemble_dir)
+    if not discovered:
+        return list(models)
+    merged: List[str] = []
+    seen: set[str] = set()
+    for name in list(models) + discovered:
+        if name not in seen:
+            seen.add(name)
+            merged.append(name)
+    merged.sort(key=lambda n: (_pod_index_from_model_name(n), n))
+    if len(merged) != len(models):
+        print(
+            f"Expanded POD_energy hyperparameter models: {len(models)} -> {len(merged)}",
+            flush=True,
+        )
+    return merged
+
+
+def _pod_hash_from_model_name(model_name: str) -> Optional[str]:
+    m = _RE_POD_INDEX_LABEL.match(model_name)
+    if not m:
+        return None
+    suffix = str(model_name[m.end() :]).strip()
+    if suffix and re.fullmatch(r"[0-9a-f]+", suffix, flags=re.I):
+        return suffix
+    return None
+
+
+def _pod_row_dict_for_hash(pod_hash: str) -> Optional[dict]:
+    df = _load_pod_search_dataframe()
+    if df is None:
+        return None
+    target = str(pod_hash).strip().lower()
+    hits = df[df["hash"].astype(str).str.lower() == target]
+    if hits.empty:
+        return None
+    return hits.iloc[0].to_dict()
+
+
+def _resolve_pod_hyperparam_row(model_name: str) -> Optional[dict]:
+    """
+    Resolve a POD hyperparameter-search CSV row for ``POD_energy_POD_index_*``.
+
+    Prefer the hash embedded in the ensemble folder name; fall back to the
+    ``POD_index`` row in the tightened CSV.
+    """
+    pod_hash = _pod_hash_from_model_name(model_name)
+    if pod_hash:
+        row = _pod_row_dict_for_hash(pod_hash)
+        if row is not None:
+            return row
+
+    m = _RE_POD_INDEX_LABEL.match(model_name)
+    if m is None:
+        return None
+    pod_idx = int(m.group(1))
+
+    if pod_row_for_index is not None:
+        try:
+            return pod_row_for_index(pod_idx).to_dict()
+        except Exception:
+            pass
+    return None
+
+
+def pod_hyperparams_from_model(model_name: str) -> Optional[Dict[str, Any]]:
+    """
+    Return POD search hyperparameters for ``POD_energy_POD_index_*``.
+
+    Keys: ``two_body_radial``, ``three_body_radial``, ``three_body_angular``,
+    and ``rcut`` (Å) when present in the search CSV.
+    """
+    row = _resolve_pod_hyperparam_row(model_name)
+    if row is None:
+        pod_idx = _pod_index_from_model_name(model_name)
+        df = _load_pod_search_dataframe()
+        if df is not None and 0 <= pod_idx < len(df):
+            row = df.iloc[int(pod_idx)].to_dict()
+    if row is None:
+        print(
+            f"  Warning: could not resolve POD hyperparameters for {model_name!r}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return None
+    try:
+        out: Dict[str, Any] = {
+            "two_body_radial": int(row["two_body_radial"]),
+            "three_body_radial": int(row["three_body_radial"]),
+            "three_body_angular": int(row["three_body_angular"]),
+        }
+    except (KeyError, TypeError, ValueError) as exc:
+        print(
+            f"  Warning: invalid POD hyperparameter row for {model_name!r}: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return None
+    if "rcut" in row and row["rcut"] is not None and str(row["rcut"]).strip() != "":
+        try:
+            out["rcut"] = float(row["rcut"])
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def pod_basis_counts_from_model(model_name: str) -> Optional[Tuple[int, int, int]]:
+    """
+    Return ``(two_body_radial, three_body_radial, three_body_angular)`` for a
+    ``POD_energy_POD_index_*`` ensemble folder name.
+    """
+    hp = pod_hyperparams_from_model(model_name)
+    if hp is None:
+        return None
+    return (
+        int(hp["two_body_radial"]),
+        int(hp["three_body_radial"]),
+        int(hp["three_body_angular"]),
+    )
+
+
+def _format_rcut_slug(rcut: float) -> str:
+    """Filename / label slug for a POD cutoff (e.g. ``6`` or ``6.5``)."""
+    r = float(rcut)
+    if abs(r - round(r)) < 1e-9:
+        return str(int(round(r)))
+    return f"{r:g}"
+
+
+def _pod_family_label_for_rcut(rcut: Optional[float]) -> str:
+    """Figure family label; separate plots when rcut differs."""
+    if rcut is None or not np.isfinite(float(rcut)):
+        return "POD_energy"
+    return f"POD_energy_rcut{_format_rcut_slug(float(rcut))}"
+
+
+def _group_pod_records_by_rcut(
+    pod_records: Sequence[Dict[str, Any]],
+) -> List[Tuple[Optional[float], List[Dict[str, Any]]]]:
+    """Group POD records by ``rcut`` (Å); ``None`` if missing. Sorted by rcut."""
+    groups: Dict[Optional[float], List[Dict[str, Any]]] = {}
+    for rec in pod_records:
+        rcut_raw = rec.get("rcut", None)
+        key: Optional[float]
+        if rcut_raw is None or (
+            isinstance(rcut_raw, float) and not np.isfinite(rcut_raw)
+        ):
+            key = None
+        else:
+            try:
+                key = float(rcut_raw)
+            except (TypeError, ValueError):
+                key = None
+        groups.setdefault(key, []).append(rec)
+    def _sort_key(item: Tuple[Optional[float], List[Dict[str, Any]]]):
+        rcut, _ = item
+        return (rcut is None, float(rcut) if rcut is not None else 0.0)
+
+    return sorted(groups.items(), key=_sort_key)
+
+
+def acsf_mw_from_model(model_name: str) -> Optional[Tuple[int, int]]:
+    """Return ``(M, W)`` from an ``ACSF_hoppings*_M_*_W_*`` ensemble folder name."""
+    m = _RE_ACSF_MW.match(model_name)
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2))
+
+
+def acsf_family_prefix(model_name: str) -> Optional[str]:
+    if model_name.startswith("ACSF_hoppings_sk"):
+        return "ACSF_hoppings_sk"
+    if model_name.startswith("ACSF_hoppings"):
+        return "ACSF_hoppings"
+    return None
+
+
+def collect_hyperparam_calibration_records(
+    entries: Sequence[Tuple[str, str]],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Build POD and ACSF records with NLL and likelihood at min-miscalibration.
+
+    Each record includes ``model_name``, ``nll``, ``likelihood``, hyperparameters,
+    and the control value used.
+    """
+    pod_records: List[Dict[str, Any]] = []
+    acsf_records: List[Dict[str, Any]] = []
+
+    for model_name, path in entries:
+        cv, miscal, nll, nll_std = metric_at_min_miscalibration(path, "nll")
+        _, _, likelihood, likelihood_std = metric_at_min_miscalibration(path, "likelihood")
+        _, _, loo_log_pred, loo_log_pred_std = metric_at_min_miscalibration(
+            path, LOO_LOG_PREDICTIVE_KEY,
+        )
+        likelihood = _sanitize_likelihood(likelihood)
+        if not np.isfinite(nll) and likelihood <= 0.0 and not np.isfinite(loo_log_pred):
+            print(
+                f"  Warning: no finite NLL/likelihood/LOO at min-miscalibration for "
+                f"{model_name!r}",
+                file=sys.stderr,
+                flush=True,
+            )
+            continue
+        print(
+            f"  @ min miscalibration: {model_name}  control={cv:g}  "
+            f"M={miscal:.4f}  NLL={nll:.4f}  likelihood={likelihood:.4e}  "
+            f"LOO log pred={loo_log_pred:.4f}",
+            flush=True,
+        )
+
+        if model_name.startswith("POD_energy"):
+            hp = pod_hyperparams_from_model(model_name)
+            if hp is None:
+                continue
+            rec: Dict[str, Any] = {
+                "model_name": model_name,
+                "nll": float(nll),
+                "nll_std": float(nll_std),
+                "likelihood": likelihood,
+                "likelihood_std": float(likelihood_std),
+                LOO_LOG_PREDICTIVE_KEY: float(loo_log_pred),
+                f"{LOO_LOG_PREDICTIVE_KEY}_std": float(loo_log_pred_std),
+                "control_value": float(cv),
+                "miscalibration_area": float(miscal),
+                "two_body_radial": int(hp["two_body_radial"]),
+                "three_body_radial": int(hp["three_body_radial"]),
+                "three_body_angular": int(hp["three_body_angular"]),
+            }
+            if "rcut" in hp:
+                rec["rcut"] = float(hp["rcut"])
+            pod_records.append(rec)
+            continue
+
+        family = acsf_family_prefix(model_name)
+        if family is not None:
+            mw = acsf_mw_from_model(model_name)
+            if mw is None:
+                continue
+            m_val, w_val = mw
+            acsf_records.append(
+                {
+                    "model_name": model_name,
+                    "family": family,
+                    "nll": float(nll),
+                    "nll_std": float(nll_std),
+                    "likelihood": likelihood,
+                    "likelihood_std": float(likelihood_std),
+                    LOO_LOG_PREDICTIVE_KEY: float(loo_log_pred),
+                    f"{LOO_LOG_PREDICTIVE_KEY}_std": float(loo_log_pred_std),
+                    "control_value": float(cv),
+                    "miscalibration_area": float(miscal),
+                    "M": m_val,
+                    "W": w_val,
+                },
+            )
+
+    return pod_records, acsf_records
+
+
+def collect_nll_hyperparam_records(
+    entries: Sequence[Tuple[str, str]],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Backward-compatible alias for :func:`collect_hyperparam_calibration_records`."""
+    return collect_hyperparam_calibration_records(entries)
+
+
+def _plot_pod_metric_vs_two_body_radial(
+    pod_records: Sequence[Dict[str, Any]],
+    figures_dir: str,
+    *,
+    plot_target: str,
+    technique: str,
+    family_label: str,
+    metric_key: str,
+    ylabel: str,
+    filename_suffix: str,
+    log_y: bool = False,
+    dpi: int = 150,
+    show_title: bool = True,
+    legend_outside: bool = False,
+) -> Optional[str]:
+    """Metric vs 2-body radial basis count, grouped by 3-body radial / angular."""
+    if not pod_records:
+        return None
+
+    groups: Dict[Tuple[int, int], List[Dict[str, Any]]] = {}
+    for rec in pod_records:
+        key = (int(rec["three_body_radial"]), int(rec["three_body_angular"]))
+        groups.setdefault(key, []).append(rec)
+
+    expected_groups = _pod_valid_hyperparameter_groups()
+    plotted_keys = {(int(r["three_body_radial"]), int(r["three_body_angular"])) for r in pod_records}
+    missing_groups = [g for g in expected_groups if g not in plotted_keys]
+    if missing_groups:
+        print(
+            "  POD hyperparameter plot: no models for grid group(s) "
+            + ", ".join(f"(n3r={a}, l3a={b})" for a, b in missing_groups),
+            flush=True,
+        )
+
+    fig_w = 14.0
+    fig_h = 8.5
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    for (n3r, n3a) in sorted(groups):
+        pts = sorted(groups[(n3r, n3a)], key=lambda r: int(r["two_body_radial"]))
+        x = np.array([int(p["two_body_radial"]) for p in pts], dtype=float)
+        y = np.array([float(p[metric_key]) for p in pts], dtype=float)
+        yerr = np.array(
+            [float(p.get(metric_std_key(metric_key), 0.0)) for p in pts],
+            dtype=float,
+        )
+        expected_x = _pod_valid_two_body_radial_values(n3r, n3a)
+        missing_x = sorted(set(expected_x) - set(int(v) for v in x))
+        if missing_x:
+            print(
+                f"  POD hyperparameter plot: group (n3r={n3r}, l3a={n3a}) "
+                f"missing 2-body radial value(s) {missing_x}",
+                flush=True,
+            )
+        ax.errorbar(
+            x,
+            y,
+            yerr=yerr,
+            fmt="o-",
+            lw=1.8,
+            markersize=6,
+            capsize=3,
+            label=rf"$N_{{\mathrm{{3b}}}}={int(n3r) * int(n3a)}$",
+        )
+
+    ax.set_xticks(list(_POD_TWO_BODY_RADIAL_GRID))
+    ax.set_xlim(min(_POD_TWO_BODY_RADIAL_GRID) - 0.5, max(_POD_TWO_BODY_RADIAL_GRID) + 0.5)
+    tech_label = _SAMPLING_LABEL.get(technique, technique)
+    ax.set_xlabel(r"$n_{\mathrm{rad}}$ (2-body radial basis functions)")
+    ax.set_ylabel(ylabel)
+    if show_title:
+        ax.set_title(
+            f"{family_label} — {plot_target}\n"
+            f"{ylabel} at best-calibration {tech_label} vs 2-body radial count"
+        )
+    if log_y:
+        all_y = np.concatenate(
+            [np.asarray(line.get_ydata(), dtype=float) for line in ax.lines],
+        ) if ax.lines else np.array([], dtype=float)
+        if np.any(all_y > 0):
+            ax.set_yscale("log")
+    ax.grid(True, alpha=0.3)
+    if legend_outside:
+        ax.legend(bbox_to_anchor=(1.02, 0.5), loc="center left", frameon=False)
+        fig.tight_layout(rect=(0.0, 0.0, 0.84, 1.0))
+    else:
+        ax.legend(loc="best")
+        fig.tight_layout()
+
+    os.makedirs(figures_dir, exist_ok=True)
+    tech_slug = re.sub(r"[^\w]+", "_", technique)
+    out = os.path.join(
+        figures_dir,
+        f"{_safe_filename_slug(family_label)}_{filename_suffix}_{plot_target}_{tech_slug}.png",
+    )
+    fig.savefig(out, dpi=dpi, bbox_inches="tight", pad_inches=0.15)
+    plt.close(fig)
+    print(
+        f"Wrote {out}  ({len(pod_records)} models, {len(groups)} grid group(s))",
+        flush=True,
+    )
+    return out
+
+
+def _plot_acsf_metric_vs_M(
+    acsf_records: Sequence[Dict[str, Any]],
+    figures_dir: str,
+    *,
+    plot_target: str,
+    technique: str,
+    family_label: str,
+    metric_key: str,
+    ylabel: str,
+    filename_suffix: str,
+    log_y: bool = False,
+    dpi: int = 150,
+    show_title: bool = True,
+    legend_outside: bool = False,
+) -> Optional[str]:
+    """Metric vs ``M`` for ACSF hopping models, grouped by fixed ``W``."""
+    if not acsf_records:
+        return None
+
+    groups: Dict[int, List[Dict[str, Any]]] = {}
+    for rec in acsf_records:
+        groups.setdefault(int(rec["W"]), []).append(rec)
+
+    fig, ax = plt.subplots(figsize=(8.0, 5.0))
+    for w_val in sorted(groups):
+        pts = sorted(groups[w_val], key=lambda r: int(r["M"]))
+        x = np.array([int(p["M"]) for p in pts], dtype=float)
+        y = np.array([float(p[metric_key]) for p in pts], dtype=float)
+        yerr = np.array(
+            [float(p.get(metric_std_key(metric_key), 0.0)) for p in pts],
+            dtype=float,
+        )
+        ax.errorbar(
+            x,
+            y,
+            yerr=yerr,
+            fmt="o-",
+            lw=1.8,
+            markersize=6,
+            capsize=3,
+            label=rf"$W={w_val}$",
+        )
+
+    tech_label = _SAMPLING_LABEL.get(technique, technique)
+    ax.set_xlabel(r"$M$ (radial basis functions)")
+    ax.set_ylabel(ylabel)
+    if show_title:
+        ax.set_title(
+            f"{family_label} — {plot_target}\n"
+            f"{ylabel} at best-calibration {tech_label} vs $M$"
+        )
+    if log_y:
+        all_y = np.concatenate(
+            [np.asarray(line.get_ydata(), dtype=float) for line in ax.lines],
+        )
+        if np.any(all_y > 0):
+            ax.set_yscale("log")
+    if legend_outside:
+        ax.legend(bbox_to_anchor=(1.05, 0.5), loc="center left")
+    else:
+        ax.legend(loc="best")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+
+    os.makedirs(figures_dir, exist_ok=True)
+    tech_slug = re.sub(r"[^\w]+", "_", technique)
+    out = os.path.join(
+        figures_dir,
+        f"{_safe_filename_slug(family_label)}_{filename_suffix}_{plot_target}_{tech_slug}.png",
+    )
+    fig.savefig(out, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Wrote {out}")
+    return out
+
+
+def plot_pod_nll_vs_two_body_radial(
+    pod_records: Sequence[Dict[str, Any]],
+    figures_dir: str,
+    *,
+    plot_target: str,
+    technique: str,
+    family_label: str = "POD_energy",
+    dpi: int = 150,
+) -> Optional[str]:
+    """NLL vs 2-body radial basis count, grouped by 3-body radial / angular."""
+    return _plot_pod_metric_vs_two_body_radial(
+        pod_records,
+        figures_dir,
+        plot_target=plot_target,
+        technique=technique,
+        family_label=family_label,
+        metric_key="nll",
+        ylabel="NLL",
+        filename_suffix="nll_vs_two_body_radial",
+        log_y=False,
+        dpi=dpi,
+        show_title=False,
+        legend_outside=True,
+    )
+
+
+def plot_pod_likelihood_vs_two_body_radial(
+    pod_records: Sequence[Dict[str, Any]],
+    figures_dir: str,
+    *,
+    plot_target: str,
+    technique: str,
+    family_label: str = "POD_energy",
+    dpi: int = 150,
+) -> Optional[str]:
+    """Likelihood vs 2-body radial basis count, grouped by 3-body radial / angular."""
+    return _plot_pod_metric_vs_two_body_radial(
+        pod_records,
+        figures_dir,
+        plot_target=plot_target,
+        technique=technique,
+        family_label=family_label,
+        metric_key="likelihood",
+        ylabel=r"$\langle \mathcal{L} \rangle$",
+        filename_suffix="likelihood_vs_two_body_radial",
+        log_y=True,
+        dpi=dpi,
+    )
+
+
+def plot_acsf_nll_vs_M(
+    acsf_records: Sequence[Dict[str, Any]],
+    figures_dir: str,
+    *,
+    plot_target: str,
+    technique: str,
+    family_label: str,
+    dpi: int = 150,
+) -> Optional[str]:
+    """NLL vs ``M`` for ACSF hopping models, grouped by fixed ``W``."""
+    return _plot_acsf_metric_vs_M(
+        acsf_records,
+        figures_dir,
+        plot_target=plot_target,
+        technique=technique,
+        family_label=family_label,
+        metric_key="nll",
+        ylabel="NLL",
+        filename_suffix="nll_vs_M",
+        log_y=False,
+        dpi=dpi,
+        show_title=False,
+        legend_outside=True,
+    )
+
+
+def plot_acsf_likelihood_vs_M(
+    acsf_records: Sequence[Dict[str, Any]],
+    figures_dir: str,
+    *,
+    plot_target: str,
+    technique: str,
+    family_label: str,
+    dpi: int = 150,
+) -> Optional[str]:
+    """Likelihood vs ``M`` for ACSF hopping models, grouped by fixed ``W``."""
+    return _plot_acsf_metric_vs_M(
+        acsf_records,
+        figures_dir,
+        plot_target=plot_target,
+        technique=technique,
+        family_label=family_label,
+        metric_key="likelihood",
+        ylabel=r"$\langle \mathcal{L} \rangle$",
+        filename_suffix="likelihood_vs_M",
+        log_y=True,
+        dpi=dpi,
+    )
+
+
+def plot_pod_loo_log_predictive_vs_two_body_radial(
+    pod_records: Sequence[Dict[str, Any]],
+    figures_dir: str,
+    *,
+    plot_target: str,
+    technique: str,
+    family_label: str = "POD_energy",
+    dpi: int = 150,
+) -> Optional[str]:
+    """LOO log predictive likelihood vs 2-body radial count."""
+    return _plot_pod_metric_vs_two_body_radial(
+        pod_records,
+        figures_dir,
+        plot_target=plot_target,
+        technique=technique,
+        family_label=family_label,
+        metric_key=LOO_LOG_PREDICTIVE_KEY,
+        ylabel=r"$L_{\mathrm{LOO}}$",
+        filename_suffix="loo_log_predictive_vs_two_body_radial",
+        log_y=False,
+        dpi=dpi,
+    )
+
+
+def plot_acsf_loo_log_predictive_vs_M(
+    acsf_records: Sequence[Dict[str, Any]],
+    figures_dir: str,
+    *,
+    plot_target: str,
+    technique: str,
+    family_label: str,
+    dpi: int = 150,
+) -> Optional[str]:
+    """LOO log predictive likelihood vs ``M`` for ACSF hopping models."""
+    return _plot_acsf_metric_vs_M(
+        acsf_records,
+        figures_dir,
+        plot_target=plot_target,
+        technique=technique,
+        family_label=family_label,
+        metric_key=LOO_LOG_PREDICTIVE_KEY,
+        ylabel=r"$L_{\mathrm{LOO}}$",
+        filename_suffix="loo_log_predictive_vs_M",
+        log_y=False,
+        dpi=dpi,
+    )
+
+
+def plot_calibration_hyperparam_figures(
+    entries: Sequence[Tuple[str, str]],
+    figures_dir: str,
+    *,
+    plot_target: str,
+    technique: str,
+    plot_nll: bool = False,
+    plot_likelihood: bool = False,
+    plot_loo: bool = False,
+    dpi: int = 150,
+) -> None:
+    """Generate POD/ACSF hyperparameter figures for NLL, likelihood, and/or LOO."""
+    if not plot_nll and not plot_likelihood and not plot_loo:
+        return
+
+    pod_records, acsf_records = collect_hyperparam_calibration_records(entries)
+
+    if plot_nll:
+        pod_nll = [r for r in pod_records if np.isfinite(r.get("nll", np.nan))]
+        if pod_nll:
+            for rcut, recs in _group_pod_records_by_rcut(pod_nll):
+                plot_pod_nll_vs_two_body_radial(
+                    recs,
+                    figures_dir,
+                    plot_target=plot_target,
+                    technique=technique,
+                    family_label=_pod_family_label_for_rcut(rcut),
+                    dpi=dpi,
+                )
+        elif pod_records:
+            print(
+                "No POD_energy models with finite NLL at min miscalibration "
+                "for hyperparameter plot.",
+                flush=True,
+            )
+        else:
+            print(
+                "No POD_energy models with resolvable hyperparameters for "
+                "NLL hyperparameter plot.",
+                flush=True,
+            )
+
+        acsf_by_family: Dict[str, List[Dict[str, Any]]] = {}
+        for rec in acsf_records:
+            acsf_by_family.setdefault(str(rec["family"]), []).append(rec)
+        for family, recs in sorted(acsf_by_family.items()):
+            plot_acsf_nll_vs_M(
+                recs,
+                figures_dir,
+                plot_target=plot_target,
+                technique=technique,
+                family_label=family,
+                dpi=dpi,
+            )
+        if not acsf_records:
+            print("No ACSF_hoppings models with finite NLL for hyperparameter plot.", flush=True)
+
+    if plot_likelihood:
+        pod_lik = [r for r in pod_records if r.get("likelihood", 0.0) > 0.0]
+        if pod_lik:
+            for rcut, recs in _group_pod_records_by_rcut(pod_lik):
+                plot_pod_likelihood_vs_two_body_radial(
+                    recs,
+                    figures_dir,
+                    plot_target=plot_target,
+                    technique=technique,
+                    family_label=_pod_family_label_for_rcut(rcut),
+                    dpi=dpi,
+                )
+        else:
+            print(
+                "No POD_energy models with finite likelihood for hyperparameter plot "
+                "(rerun --calculate to populate likelihood arrays).",
+                flush=True,
+            )
+
+        acsf_by_family = {}
+        for rec in acsf_records:
+            if rec.get("likelihood", 0.0) > 0.0:
+                acsf_by_family.setdefault(str(rec["family"]), []).append(rec)
+        for family, recs in sorted(acsf_by_family.items()):
+            plot_acsf_likelihood_vs_M(
+                recs,
+                figures_dir,
+                plot_target=plot_target,
+                technique=technique,
+                family_label=family,
+                dpi=dpi,
+            )
+        if not acsf_by_family:
+            print(
+                "No ACSF_hoppings models with finite likelihood for hyperparameter plot "
+                "(rerun --calculate to populate likelihood arrays).",
+                flush=True,
+            )
+
+    if plot_loo:
+        pod_loo = [
+            r for r in pod_records
+            if np.isfinite(r.get(LOO_LOG_PREDICTIVE_KEY, np.nan))
+        ]
+        if pod_loo:
+            for rcut, recs in _group_pod_records_by_rcut(pod_loo):
+                plot_pod_loo_log_predictive_vs_two_body_radial(
+                    recs,
+                    figures_dir,
+                    plot_target=plot_target,
+                    technique=technique,
+                    family_label=_pod_family_label_for_rcut(rcut),
+                    dpi=dpi,
+                )
+        else:
+            print(
+                "No POD_energy models with finite LOO log predictive likelihood "
+                "(rerun --calculate to populate arrays).",
+                flush=True,
+            )
+
+        acsf_by_family = {}
+        for rec in acsf_records:
+            if np.isfinite(rec.get(LOO_LOG_PREDICTIVE_KEY, np.nan)):
+                acsf_by_family.setdefault(str(rec["family"]), []).append(rec)
+        for family, recs in sorted(acsf_by_family.items()):
+            plot_acsf_loo_log_predictive_vs_M(
+                recs,
+                figures_dir,
+                plot_target=plot_target,
+                technique=technique,
+                family_label=family,
+                dpi=dpi,
+            )
+        if not acsf_by_family:
+            print(
+                "No ACSF_hoppings models with finite LOO log predictive likelihood "
+                "(rerun --calculate to populate arrays).",
+                flush=True,
+            )
+
+
+def plot_nll_hyperparam_figures(
+    entries: Sequence[Tuple[str, str]],
+    figures_dir: str,
+    *,
+    plot_target: str,
+    technique: str,
+    dpi: int = 150,
+) -> None:
+    """Generate POD and ACSF NLL-vs-hyperparameter figures from metric NPZs."""
+    plot_calibration_hyperparam_figures(
+        entries,
+        figures_dir,
+        plot_target=plot_target,
+        technique=technique,
+        plot_nll=True,
+        plot_likelihood=False,
+        dpi=dpi,
+    )
+
+
+def plot_nll_at_min_miscalibration_bar(
+    entries: List[Tuple[str, str]],
+    figures_dir: str,
+    *,
+    family_label: str,
+    plot_target: str,
+    technique: str,
+    dpi: int = 150,
+) -> Optional[str]:
+    """
+    Bar chart of NLL at each model's best-calibration control value.
+
+    The control value per model is the grid point that minimizes
+    ``miscalibration_area`` on that model's saved metrics curve.
+    """
+    if not entries:
+        return None
+
+    labels: List[str] = []
+    nll_vals: List[float] = []
+    nll_stds: List[float] = []
+    miscals: List[float] = []
+
+    for model_name, path in entries:
+        cv, miscal, nll, nll_std = metrics_at_min_miscalibration(path)
+        if not np.isfinite(nll):
+            print(
+                f"  Warning: no finite NLL at min-miscalibration point for {model_name!r}",
+                file=sys.stderr,
+                flush=True,
+            )
+            continue
+        labels.append(format_compare_bar_label(model_name, family_label))
+        nll_vals.append(float(nll))
+        nll_stds.append(float(nll_std) if np.isfinite(nll_std) else 0.0)
+        miscals.append(float(miscal))
+        print(
+            f"  NLL @ best calibration: {labels[-1]}  "
+            f"control={cv:g}  NLL={nll:.4f}  M={miscal:.4f}",
+            flush=True,
+        )
+
+    if not labels:
+        print("No NLL values at min-miscalibration points to plot.", file=sys.stderr)
+        return None
+
+    control_name = "T" if technique == "mcmc" else "p"
+    tech_label = _SAMPLING_LABEL.get(technique, technique)
+
+    fig, ax = plt.subplots(figsize=(max(7.0, 0.75 * len(labels)), 5.0))
+    x = np.arange(len(labels))
+    ax.bar(
+        x,
+        nll_vals,
+        yerr=nll_stds,
+        capsize=3,
+        color="steelblue",
+        edgecolor="black",
+        linewidth=0.6,
+    )
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=45, ha="right")
+    ax.set_ylabel("NLL")
+    ax.set_title(
+        f"{family_label} — {plot_target}\n"
+        f"NLL at {control_name} minimizing miscalibration ({tech_label})"
+    )
+    ax.grid(True, axis="y", alpha=0.3)
+    fig.tight_layout()
+
+    os.makedirs(figures_dir, exist_ok=True)
+    tech_slug = re.sub(r"[^\w]+", "_", technique)
+    family_slug = _safe_filename_slug(family_label)
+    out = os.path.join(
+        figures_dir,
+        f"{family_slug}_compare_nll_at_min_miscalibration_{tech_slug}.png",
+    )
+    fig.savefig(out, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Wrote {out}")
+    return out
 
 
 def resolve_ensemble_pickle(
@@ -1118,21 +2896,24 @@ def plot_metric_curves(
     metric: str,
     figures_dir: str,
     x_scale: str,
-    title: Optional[str] = None,
+    *,
+    family_label: Optional[str] = None,
 ) -> str:
     """
     entries : list of (label, path_to_npz)
     metric : model_partition_function | crps | nll | mae | miscalibration_area
+        | standardized_miscalibration_area
     x_scale : linear | log
     """
     plt.figure(figsize=(8, 5))
     technique_key: Optional[str] = None
-    for label, path in entries:
+    for _label, path in entries:
         d = load_metrics_npz(path)
         if technique_key is None:
             technique_key = str(d["meta"].get("technique", "mcmc"))
         x = d["control_values"]
         y = np.asarray(d[metric], dtype=float)
+        yerr = np.asarray(d.get(metric_std_key(metric), np.zeros_like(y)), dtype=float)
         meta = d["meta"]
         cn = meta.get("control_name", "control")
         if x_scale == "log":
@@ -1146,29 +2927,27 @@ def plot_metric_curves(
         else:
             xplot = x
             xlab = cn
-        plt.plot(xplot, y, marker="o", ms=4, label=label)
+        plt.errorbar(xplot, y, yerr=yerr, marker="o", ms=4, capsize=3)
 
     plt.xlabel(xlab)
     ylab = {
         "model_partition_function": "model_partition_function (Z)",
         "miscalibration_area": r"$\mathcal{M}$",
+        "standardized_miscalibration_area": r"$\mathcal{M}_{\mathrm{std}}$",
     }.get(metric, metric)
     plt.ylabel(ylab)
-    if metric == "miscalibration_area":
+    if metric in ("miscalibration_area", "standardized_miscalibration_area"):
         plt.ylim(0.0, 1.0)
-    tech_label = _SAMPLING_LABEL.get(technique_key or "mcmc", technique_key or "mcmc")
-    if title:
-        plt.title(f"{title} ({tech_label})")
-    else:
-        plt.title(f"{tech_label} — {metric}")
-    plt.legend(bbox_to_anchor=(1.05, 0.5), loc="center left")
     plt.tight_layout()
     os.makedirs(figures_dir, exist_ok=True)
     safe_metric = re.sub(r"[^\w]+", "_", metric)
     tech_slug = re.sub(r"[^\w]+", "_", technique_key or "mcmc")
-    out = os.path.join(
-        figures_dir, f"compare_{safe_metric}_{x_scale}_{tech_slug}.png"
-    )
+    if family_label:
+        family_slug = _safe_filename_slug(family_label)
+        fname = f"{family_slug}_compare_{safe_metric}_{x_scale}_{tech_slug}.png"
+    else:
+        fname = f"compare_{safe_metric}_{x_scale}_{tech_slug}.png"
+    out = os.path.join(figures_dir, fname)
     plt.savefig(out, dpi=150, bbox_inches="tight")
     plt.close()
     print(f"Wrote {out}")
@@ -1292,14 +3071,16 @@ def main() -> None:
         type=int,
         default=None,
         help="Index into sorted control grid for --diagnostics when --temperatures "
-             "(mcmc) or --p-values (subsamp) is unset; default: middle.",
+             "(mcmc) or --p-values (subsamp) is unset; overrides min-miscalibration default.",
     )
     p.add_argument(
         "--metric",
         action="append",
         default=None,
-        help="Metric key: model_partition_function, crps, nll, mae, miscalibration_area. "
-        "Repeatable. Default: Z, crps, nll, miscalibration_area.",
+        help="Metric key: model_partition_function, crps, nll, mae, miscalibration_area, "
+        "standardized_miscalibration_area. "
+        "Repeatable. Default: Z, crps, nll, miscalibration_area, "
+        "standardized_miscalibration_area.",
     )
     p.add_argument(
         "--x-scale",
@@ -1307,10 +3088,52 @@ def main() -> None:
         default="log",
         help="X-axis for metric curves: log → log10(T) or log10(p).",
     )
+    p.add_argument(
+        "--plot-nll-hyperparams",
+        action="store_true",
+        help=(
+            "Plot NLL at best calibration vs hyperparameters: POD_energy NLL vs "
+            "2-body radial count (one figure per rcut; curves per 3-body "
+            "radial/angular); ACSF_hoppings* NLL vs M (curves per W)."
+        ),
+    )
+
+    p.add_argument(
+        "--plot-likelihood-hyperparams",
+        action="store_true",
+        help=(
+            "Plot mean Gaussian likelihood at best calibration vs hyperparameters: "
+            "POD_energy vs 2-body radial count (one figure per rcut; curves per "
+            "3-body radial/angular); ACSF_hoppings* vs M (curves per W). Requires "
+            "likelihood in saved calibration NPZs (--calculate)."
+        ),
+    )
+
+    p.add_argument(
+        "--plot-loo-hyperparams",
+        action="store_true",
+        help=(
+            "Plot LOO-CV mean log predictive likelihood at best calibration vs "
+            "hyperparameters (same layout as NLL/likelihood; POD one figure per "
+            "rcut). Requires loo_log_predictive_likelihood in saved calibration "
+            "NPZs (--calculate)."
+        ),
+    )
 
     args = p.parse_args()
-    if not args.calculate and not args.plot_metrics and not args.diagnostics:
-        p.error("Select at least one of: --calculate, --plot-metrics, --diagnostics")
+    if (
+        not args.calculate
+        and not args.plot_metrics
+        and not args.diagnostics
+        and not args.plot_nll_hyperparams
+        and not args.plot_likelihood_hyperparams
+        and not args.plot_loo_hyperparams
+    ):
+        p.error(
+            "Select at least one of: --calculate, --plot-metrics, "
+            "--diagnostics, --plot-nll-hyperparams, --plot-likelihood-hyperparams, "
+            "--plot-loo-hyperparams"
+        )
 
     # Paths such as ``ensembles/`` and ``calibration_metrics/`` are relative to
     # ``uncertainty_quantification/``, not ``visualizations/``.
@@ -1375,25 +3198,50 @@ def main() -> None:
                 )
 
             if args.diagnostics:
+                metrics_path = metrics_npz_path(
+                    args.metrics_dir, model_name, technique, target,
+                )
                 diag_idx = _resolve_diagnostic_index(
                     technique,
                     control_values,
                     args.temperatures,
                     args.p_values,
                     args.diagnostic_index,
+                    paths_by_control=paths,
+                    target=target,
+                    T0_ref=T0_ref,
+                    z_reference_temperature=args.z_reference_temperature,
+                    metrics_path=metrics_path,
                 )
                 tv_parsed = _parse_float_list(args.temperatures)
+                pv_parsed = _parse_float_list(args.p_values)
                 if technique == "mcmc" and tv_parsed is not None and tv_parsed.size > 0:
                     print(
                         f"[diagnostics] {model_name}: T_request={float(tv_parsed[0]):g} → "
                         f"T={float(control_values[diag_idx]):g} (index {diag_idx})",
                         flush=True,
                     )
-                pv_parsed = _parse_float_list(args.p_values)
-                if technique == "subsamp" and pv_parsed is not None and pv_parsed.size > 0:
+                elif technique == "subsamp" and pv_parsed is not None and pv_parsed.size > 0:
                     print(
                         f"[diagnostics] {model_name}: p_request={float(pv_parsed[0]):g} → "
                         f"p={float(control_values[diag_idx]):g} (index {diag_idx})",
+                        flush=True,
+                    )
+                elif args.diagnostic_index is None:
+                    miscal = _miscalibration_on_discovered_grid(
+                        control_values,
+                        paths,
+                        technique,
+                        target,
+                        T0_ref,
+                        args.z_reference_temperature,
+                        metrics_path=metrics_path,
+                    )
+                    print(
+                        f"[diagnostics] {model_name}: min miscalibration → "
+                        f"{control_name}={float(control_values[diag_idx]):g} "
+                        f"(miscalibration_area={float(miscal[diag_idx]):g}, "
+                        f"index {diag_idx})",
                         flush=True,
                     )
                 run_diagnostics_plots(
@@ -1415,6 +3263,7 @@ def main() -> None:
             "crps",
             "nll",
             "miscalibration_area",
+            "standardized_miscalibration_area",
         ]
         if args.compare:
             entries = []
@@ -1453,13 +3302,24 @@ def main() -> None:
                     metrics_dir=args.metrics_dir,
                     technique=technique,
                 )
-                for mname in metrics_to_plot:
+                compare_label = common_model_label([name for name, _ in entries])
+                metrics_for_curves = [m for m in metrics_to_plot if m != "nll"]
+                for mname in metrics_for_curves:
                     plot_metric_curves(
                         entries,
                         mname,
                         args.figures_dir,
                         args.x_scale,
-                        title=f"{plot_target} — {mname}",
+                        family_label=compare_label,
+                    )
+                if "nll" in metrics_to_plot:
+                    plot_nll_at_min_miscalibration_bar(
+                        entries,
+                        args.figures_dir,
+                        family_label=compare_label,
+                        plot_target=plot_target,
+                        technique=technique,
+                        dpi=150,
                     )
         else:
             for model_name in models:
@@ -1492,8 +3352,56 @@ def main() -> None:
                         mname,
                         os.path.join(args.figures_dir, model_name),
                         args.x_scale,
-                        title=f"{model_name} — {mname}",
                     )
+
+    if args.plot_nll_hyperparams or args.plot_likelihood_hyperparams or args.plot_loo_hyperparams:
+        hp_models = expand_pod_energy_hyperparam_models(models, ensemble_root)
+        hp_entries: List[Tuple[str, str]] = []
+        for model_name in hp_models:
+            plot_target = resolve_target_for_model(
+                model_name,
+                target_arg=args.target,
+                ensemble_root=ensemble_root,
+                metrics_dir=args.metrics_dir,
+                technique=technique,
+            )
+            path = ensure_metrics_npz(
+                model_name,
+                technique,
+                plot_target,
+                ensemble_root=ensemble_root,
+                metrics_dir=args.metrics_dir,
+                auto_discover=args.auto_discover,
+                temperatures=args.temperatures,
+                p_values=args.p_values,
+                no_t0_fit=args.no_t0_fit,
+                z_reference_temperature=args.z_reference_temperature,
+            )
+            if path is None:
+                continue
+            hp_entries.append((model_name, path))
+        if not hp_entries:
+            print(
+                "No calibration metrics for hyperparameter plots.",
+                file=sys.stderr,
+            )
+        else:
+            plot_target = resolve_target_for_model(
+                hp_entries[0][0],
+                target_arg=args.target,
+                ensemble_root=ensemble_root,
+                metrics_dir=args.metrics_dir,
+                technique=technique,
+            )
+            plot_calibration_hyperparam_figures(
+                hp_entries,
+                args.figures_dir,
+                plot_target=plot_target,
+                technique=technique,
+                plot_nll=args.plot_nll_hyperparams,
+                plot_likelihood=args.plot_likelihood_hyperparams,
+                plot_loo=args.plot_loo_hyperparams,
+            )
 
 
 if __name__ == "__main__":

@@ -3,7 +3,8 @@ Shared model resolution for UQ propagation scripts.
 
 Supports ensembles for:
 
-* LAMMPS-backed: ``POD_energy``, ``TETB_POD``, ``Tersoff+DRIP``, ``Tersoff+Kolmogorov_Crespi``
+* LAMMPS-backed: ``POD_energy``, ``PODD3_energy``, ``TETB_POD``, ``Tersoff+DRIP``,
+  ``Tersoff+Kolmogorov_Crespi``
 * Python-backed: ``Allegro_energy`` (NequIP/Allegro checkpoint)
 """
 
@@ -14,7 +15,7 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 import numpy as np
 
-_RE_POD_INDEX = re.compile(r"^POD_energy_POD_index_(\d+)_([0-9a-f]+)$", re.I)
+_RE_POD_INDEX = re.compile(r"^POD(?:D3)?_energy_POD_index_(\d+)_([0-9a-f]+)$", re.I)
 _RE_TETB_POD_INDEX = re.compile(
     r"^TETB_POD_(?P<tag>tb_M_\d+_W_\d+_pod_M_\d+_W_\d+)_POD_index_(\d+)_([0-9a-f]+)$",
     re.I,
@@ -28,6 +29,7 @@ _RE_ALLEGRO_CKPT = re.compile(r"^Allegro_energy_ckpt_([0-9a-f]+)$", re.I)
 UQ_LAMMPS_MODELS = frozenset(
     {
         "POD_energy",
+        "PODD3_energy",
         "TETB_POD",
         "Tersoff+DRIP",
         "Tersoff+Kolmogorov_Crespi",
@@ -41,7 +43,7 @@ def is_uq_lammps_model(model_name: str) -> bool:
     """True if ``model_name`` is a LAMMPS-backed UQ propagation model."""
     if model_name in UQ_LAMMPS_MODELS:
         return True
-    if model_name.startswith("POD_energy"):
+    if model_name.startswith("POD_energy") or model_name.startswith("PODD3_energy"):
         return True
     if model_name.startswith("TETB_POD"):
         return True
@@ -62,6 +64,8 @@ def resolve_load_name(model_name: str) -> str:
     """``model_name`` passed to :func:`get_MCMC_inputs` for data / calculator setup."""
     if model_name.startswith("Allegro_energy"):
         return "Allegro_energy"
+    if model_name.startswith("PODD3_energy"):
+        return model_name if model_name == "PODD3_energy" else "PODD3_energy"
     if model_name.startswith("POD_energy"):
         return model_name if model_name == "POD_energy" else "POD_energy"
     if model_name.startswith("TETB_POD"):
@@ -70,7 +74,7 @@ def resolve_load_name(model_name: str) -> str:
         return model_name
     raise ValueError(
         f"Unsupported model for UQ propagation: {model_name!r}. "
-        f"Expected LAMMPS model, Allegro_energy*, or POD/TETB folder name."
+        f"Expected LAMMPS model, Allegro_energy*, or POD/TETB/PODD3 folder name."
     )
 
 
@@ -86,27 +90,23 @@ def _tetb_mw_from_tag(tag: str) -> Dict[str, int]:
     }
 
 
-def _pod_hyperparams_from_hash(pod_hash: str) -> Optional[Dict[str, Any]]:
-    """
-    Return ``{"pod_hyperparams": ..., "pod_cutoff": ..., "pod_hash": ...}`` by
-    looking up *pod_hash* directly in the CSV (no index file needed).
-    Returns ``None`` if the hash is not found.
-    """
-    from pathlib import Path
+def _pod_hyperparams_from_csv_identity(
+    pod_index: int,
+    pod_hash: str,
+) -> Dict[str, Any]:
+    """Resolve and validate ``POD_index`` + hash against the search CSV/cache."""
+    from blg_model_builder.pod_model_selection import pod_hyperparams_for_index
 
-    import pandas as pd
-
-    csv_path = Path(__file__).resolve().parent / "pod_hyperparam_search" / "pod_hyperparam_search_results.csv"
-    if not csv_path.is_file():
-        return None
-    df = pd.read_csv(csv_path)
-    match = df[df["hash"].astype(str) == str(pod_hash)]
-    if match.empty:
-        return None
-    row = match.iloc[0]
-    from blg_model_builder.pod_model_selection import pod_hyperparams_from_row
-
-    pod_hp, pod_cutoff, h = pod_hyperparams_from_row(row)
+    pod_hp, pod_cutoff, h = pod_hyperparams_for_index(
+        int(pod_index),
+        require_fit_cache=True,
+    )
+    if str(h).lower() != str(pod_hash).lower():
+        raise ValueError(
+            f"Ensemble folder identifies POD_index={int(pod_index)} "
+            f"hash={pod_hash}, but CSV row {int(pod_index)} has hash={h}. "
+            "Regenerate the MCMC ensemble for the current CSV."
+        )
     return {"pod_hyperparams": pod_hp, "pod_cutoff": pod_cutoff, "pod_hash": h}
 
 
@@ -114,18 +114,13 @@ def mcmc_kw_for_model(model_name: str) -> Dict[str, Any]:
     """
     Keyword arguments for :func:`get_MCMC_inputs` from an ensemble folder name.
 
-    For ``POD_energy_POD_index_<i>_<hash>`` folders the **hash** embedded in
-    the folder name is used to look up hyperparameters directly from the search
-    CSV.  This ensures the calculator always matches the ensemble that was
-    generated for that hash, regardless of how ``use_pod_models_hash.txt`` has
-    changed since the ensemble was produced.  The index is used only as a
-    fallback when the hash is not in the CSV.
+    For ``POD_energy_POD_index_<i>_<hash>`` folders, row ``i`` in
+    ``pod_hyperparam_search.csv`` must contain the same hash and have an
+    associated search fit cache.
 
     For ``Allegro_energy_ckpt_<tag>`` folders, the checkpoint path is resolved
     by scanning the repository for a ``.ckpt`` file with matching tag.
     """
-    import sys
-
     m = _RE_ALLEGRO_CKPT.match(model_name)
     if m:
         from blg_model_builder.allegro_interface import resolve_allegro_checkpoint_by_tag
@@ -136,50 +131,16 @@ def mcmc_kw_for_model(model_name: str) -> Dict[str, Any]:
 
     m = _RE_POD_INDEX.match(model_name)
     if m:
-        folder_hash = m.group(2)
-        kw = _pod_hyperparams_from_hash(folder_hash)
-        if kw is not None:
-            return kw
-        # Hash not in CSV — fall back to index-based lookup
         pod_index = int(m.group(1))
-        try:
-            from blg_model_builder.pod_model_selection import pod_hyperparams_for_index
-
-            pod_hp, pod_cutoff, pod_hash = pod_hyperparams_for_index(pod_index)
-        except (FileNotFoundError, IndexError, KeyError) as exc:
-            print(
-                f"Warning: POD_index lookup failed ({exc}); using default POD M/W.",
-                file=sys.stderr,
-            )
-            return {"M": 10, "W": 6}
-        return {
-            "pod_hyperparams": pod_hp,
-            "pod_cutoff": pod_cutoff,
-            "pod_hash": pod_hash,
-        }
+        folder_hash = m.group(2)
+        return _pod_hyperparams_from_csv_identity(pod_index, folder_hash)
 
     m = _RE_TETB_POD_INDEX.match(model_name)
     if m:
         kw = dict(_tetb_mw_from_tag(m.group("tag")))
+        pod_index = int(m.group(2))
         folder_hash = m.group(3)
-        hash_kw = _pod_hyperparams_from_hash(folder_hash)
-        if hash_kw is not None:
-            kw.update(hash_kw)
-        else:
-            pod_index = int(m.group(2))
-            try:
-                from blg_model_builder.pod_model_selection import pod_hyperparams_for_index
-
-                pod_hp, pod_cutoff, pod_hash = pod_hyperparams_for_index(pod_index)
-                kw["pod_hyperparams"] = pod_hp
-                kw["pod_cutoff"] = pod_cutoff
-                kw["pod_hash"] = pod_hash
-            except (FileNotFoundError, IndexError, KeyError) as exc:
-                print(
-                    f"Warning: TETB_POD POD_index lookup failed ({exc}); "
-                    "using tag M/W only.",
-                    file=sys.stderr,
-                )
+        kw.update(_pod_hyperparams_from_csv_identity(pod_index, folder_hash))
         return kw
 
     m = _RE_TETB_TAG.match(model_name)
@@ -212,6 +173,10 @@ def build_uq_lammps_calculator(
     Returns ``(calc_obj, set_params_fn, load_name)``. ``set_params_fn`` is non-``None``
     for hybrid models (Tersoff+KC, Tersoff+DRIP, TETB_POD).
 
+    Uses ``calculator_only=True`` so training data are not loaded and POD
+    descriptors / batch evaluators are not computed — only the calculator is
+    needed for ensemble parameter propagation.
+
     ``extra_kw`` (e.g. CLI hyperparameters) overrides the keyword arguments
     derived from the ensemble folder name before they are forwarded to
     :func:`get_MCMC_inputs`.
@@ -222,9 +187,13 @@ def build_uq_lammps_calculator(
     from blg_model_builder.get_MCMC_inputs import get_MCMC_inputs, get_uq_lammps_runtime
 
     load_name = resolve_load_name(model_name)
-    data_kw = {**mcmc_kw_for_model(model_name), "skip_diagnostics": True}
+    data_kw = {
+        **mcmc_kw_for_model(model_name),
+        "skip_diagnostics": True,
+    }
     if extra_kw:
         data_kw.update(extra_kw)
+    data_kw["calculator_only"] = True
     get_MCMC_inputs(load_name, supercells=1, **data_kw)
     meta = get_uq_lammps_runtime()
     calc_obj = meta.get("calc_obj")
@@ -242,6 +211,8 @@ def build_uq_python_calculator(
 ) -> Tuple[Any, Optional[Callable[[np.ndarray], None]], str]:
     """Build a Python-backed calculator (Allegro) for UQ propagation.
 
+    Same ``calculator_only`` fast path as :func:`build_uq_lammps_calculator`.
+
     ``extra_kw`` (e.g. CLI hyperparameters) overrides the derived keyword
     arguments before they are forwarded to :func:`get_MCMC_inputs`.
     """
@@ -251,9 +222,13 @@ def build_uq_python_calculator(
     from blg_model_builder.get_MCMC_inputs import get_MCMC_inputs, get_uq_lammps_runtime
 
     load_name = resolve_load_name(model_name)
-    data_kw = {**mcmc_kw_for_model(model_name), "skip_diagnostics": True}
+    data_kw = {
+        **mcmc_kw_for_model(model_name),
+        "skip_diagnostics": True,
+    }
     if extra_kw:
         data_kw.update(extra_kw)
+    data_kw["calculator_only"] = True
     get_MCMC_inputs(load_name, supercells=1, **data_kw)
     meta = get_uq_lammps_runtime()
     calc_obj = meta.get("calc_obj")

@@ -1,0 +1,57 @@
+# use_pod_models_hash_propagation.txt — POD_index is 0-based line index (comments skipped)
+# 27 trials with meets_all_criteria from pod_hyperparam_search_results_tightened.csv
+# index  hash  ncoeff  test_rmse_eV_per_atom  meets_all_criteria  nll_at_min_miscal  T_at_min_miscal
+# 0  9579db3e174b3d03  ncoeff=93  rmse=0.00463904  pass=True  nll_at_min_miscal=n/a  T_at_min_miscal=n/a
+# 1  31f2e2746e2f74b4  ncoeff=97  rmse=0.00426119  pass=True  nll_at_min_miscal=n/a  T_at_min_miscal=n/a
+# 2  879e81d39f305ea3  ncoeff=136  rmse=0.0048925  pass=True  nll_at_min_miscal=n/a  T_at_min_miscal=n/a
+# 3  82af23f829e121ed  ncoeff=104  rmse=0.00410108  pass=True  nll_at_min_miscal=n/a  T_at_min_miscal=n/a
+# 4  2b7b52743db83213  ncoeff=118  rmse=0.00436483  pass=True  nll_at_min_miscal=n/a  T_at_min_miscal=n/a
+# 5  948871a365eedb46  ncoeff=137  rmse=0.00489819  pass=True  nll_at_min_miscal=n/a  T_at_min_miscal=n/a
+# 6  bdabd8292e2f6d0f  ncoeff=85  rmse=0.00385918  pass=True  nll_at_min_miscal=n/a  T_at_min_miscal=n/a
+# 7  9bd57345facf8dd3  ncoeff=115  rmse=0.0047147  pass=True  nll_at_min_miscal=n/a  T_at_min_miscal=n/a
+# 8  dc9af1c67d1cec98  ncoeff=107  rmse=0.00458641  pass=True  nll_at_min_miscal=n/a  T_at_min_miscal=n/a
+# 9  9d9459527f6ddac0  ncoeff=108  rmse=0.00435708  pass=True  nll_at_min_miscal=n/a  T_at_min_miscal=n/a
+# 10  b432849f91ef0e94  ncoeff=92  rmse=0.00459929  pass=True  nll_at_min_miscal=n/a  T_at_min_miscal=n/a
+# 11  2905348c9cf2dec7  ncoeff=103  rmse=0.00499664  pass=True  nll_at_min_miscal=n/a  T_at_min_miscal=n/a
+# 12  ccc144728d620013  ncoeff=140  rmse=0.00511488  pass=True  nll_at_min_miscal=n/a  T_at_min_miscal=n/a
+# 13  5b52231bdab43ff2  ncoeff=105  rmse=0.00469794  pass=True  nll_at_min_miscal=n/a  T_at_min_miscal=n/a
+# 14  a4f202cc9d2839f8  ncoeff=96  rmse=0.00426122  pass=True  nll_at_min_miscal=n/a  T_at_min_miscal=n/a
+# 15  4a1d265a297b09fc  ncoeff=98  rmse=0.00424842  pass=True  nll_at_min_miscal=n/a  T_at_min_miscal=n/a
+# 16  e1a48afa1b498b23  ncoeff=138  rmse=0.00518211  pass=True  nll_at_min_miscal=n/a  T_at_min_miscal=n/a
+# 17  402fcc6f618f23a0  ncoeff=104  rmse=0.00481008  pass=True  nll_at_min_miscal=n/a  T_at_min_miscal=n/a
+# 18  7b82f2858065f494  ncoeff=82  rmse=0.00414092  pass=True  nll_at_min_miscal=n/a  T_at_min_miscal=n/a
+# 19  614174a86dfb4e66  ncoeff=106  rmse=0.00458359  pass=True  nll_at_min_miscal=n/a  T_at_min_miscal=n/a
+# 20  3bc509a1ad6cc828  ncoeff=83  rmse=0.00411698  pass=True  nll_at_min_miscal=n/a  T_at_min_miscal=n/a
+# 21  ba385a7ef1dfd848  ncoeff=135  rmse=0.00493361  pass=True  nll_at_min_miscal=n/a  T_at_min_miscal=n/a
+# 22  7e12ee3858b61c41  ncoeff=95  rmse=0.00432561  pass=True  nll_at_min_miscal=n/a  T_at_min_miscal=n/a
+# 23  ca875f424c8281f6  ncoeff=81  rmse=0.00414211  pass=True  nll_at_min_miscal=n/a  T_at_min_miscal=n/a
+# 24  f558d2e9a9d4e6b4  ncoeff=84  rmse=0.00388727  pass=True  nll_at_min_miscal=n/a  T_at_min_miscal=n/a
+# 25  19c76e3ebfdb72c9  ncoeff=91  rmse=0.00448468  pass=True  nll_at_min_miscal=n/a  T_at_min_miscal=n/a
+# 26  d0adb7adc71538e1  ncoeff=94  rmse=0.00443384  pass=True  nll_at_min_miscal=n/a  T_at_min_miscal=n/a
+9579db3e174b3d03
+31f2e2746e2f74b4
+879e81d39f305ea3
+82af23f829e121ed
+2b7b52743db83213
+948871a365eedb46
+bdabd8292e2f6d0f
+9bd57345facf8dd3
+dc9af1c67d1cec98
+9d9459527f6ddac0
+b432849f91ef0e94
+2905348c9cf2dec7
+ccc144728d620013
+5b52231bdab43ff2
+a4f202cc9d2839f8
+4a1d265a297b09fc
+e1a48afa1b498b23
+402fcc6f618f23a0
+7b82f2858065f494
+614174a86dfb4e66
+3bc509a1ad6cc828
+ba385a7ef1dfd848
+7e12ee3858b61c41
+ca875f424c8281f6
+f558d2e9a9d4e6b4
+19c76e3ebfdb72c9
+d0adb7adc71538e1

@@ -7,9 +7,9 @@ bilayer graphene, for every calculator in ``MODEL_KEYS``.
   :math:`E(d)`, and read the equilibrium :math:`d_\\text{eq}(\\epsilon)`.
   Out-of-plane Poisson ratio uses the equilibrium interlayer separation
   :math:`l(\\epsilon)` from the :math:`E(d)` parabolic minimum and
-  :math:`l(0)` at zero strain. With the fixed scale ``2.46`` Å (``POISSON_NU_DENOM_A``,
-  same as ``POISSON_A0``), we use
-  :math:`\\nu(\\epsilon) = -(l(\\epsilon)-l(0))/(2.46\\,\\epsilon)`.
+  :math:`l(0)` at zero strain. With the fixed scale ``LAT_CON`` (``POISSON_NU_DENOM_A``,
+  same as ``POISSON_A0``, equilibrium :math:`a = 2.4694` Å), we use
+  :math:`\\nu(\\epsilon) = -(l(\\epsilon)-l(0))/(a\\,\\epsilon)`.
   The **reported** scalar ``nu`` is :math:`\\nu(\\epsilon_\\text{ref})` at
   ``POISSON_NU_REFERENCE_STRAIN`` (default ``+1\\%``), with :math:`l(\\epsilon_\\text{ref})`
   from the grid or linear interpolation. At :math:`\\epsilon=0` the ratio is undefined;
@@ -60,6 +60,7 @@ from blg_model_builder.potentials import (  # noqa: F401 — side effect: patch 
 )
 
 from blg_model_builder.geom_tools import get_aa_bilayer_atoms, get_bilayer_atoms
+from blg_model_builder.strain_data import LAT_CON
 
 # ---------------------------------------------------------------------------
 # Hyperparameters — single source of truth in ``test_relaxation.py``
@@ -79,9 +80,9 @@ POD_DEFAULT_INVERSE_POLYNOMIAL_DEGREE = tr.POD_DEFAULT_INVERSE_POLYNOMIAL_DEGREE
 MODEL_KEYS: Tuple[str, ...] = tr.MODEL_KEYS
 
 # Geometry: reference in-plane constant (Å), c-axis box (Å; fixed in strain tests)
-POISSON_A0 = 2.46
+POISSON_A0 = LAT_CON
 POISSON_C_VACUUM = 20.0
-# Scale ``2.46`` (Å) in ``ν(ε) = -(l(ε)−l(0)) / (POISSON_NU_DENOM_A * ε)``; same as in-plane ``a``.
+# Scale in ``ν(ε) = -(l(ε)−l(0)) / (POISSON_NU_DENOM_A * ε)``; same as in-plane ``a``.
 POISSON_NU_DENOM_A = float(POISSON_A0)
 # Engineering strain at which the scalar ``ν`` is evaluated (fraction, not percent).
 POISSON_NU_REFERENCE_STRAIN = 0.01
@@ -398,7 +399,7 @@ def test_poisson_ratios_bilayer(model_key: str, _require_lammps_py) -> None:
     nu_in_aa = _fit_inplane_nu_from_energies(e1m, e2m, e2d_aa)
 
     def _fmt_nu_raw(eps_arr: np.ndarray, raw: np.ndarray) -> str:
-        """Format per-strain ν(ε) = -(l−l0)/(2.46·ε); N/A at ε=0."""
+        """Format per-strain ν(ε) = -(l−l0)/(a·ε); N/A at ε=0."""
         parts: list[str] = []
         for e, r in zip(
             np.asarray(eps_arr, dtype=float), np.asarray(raw, dtype=float),

@@ -1,0 +1,552 @@
+[search] level_of_theory=MBD  cache=pod_hyperparam_search_cache/POD_energy_MBD/  results=pod_hyperparam_search_results_tightened_MBD.json
+[search] removed pod_hyperparam_search_results_tightened_MBD.json
+[search] removed pod_hyperparam_search_results_tightened_MBD.csv
+[search] cleared fit cache POD_energy_MBD/ (5 file(s))
+[search] Built TBLG θ=21.78°  n_atoms=28
+[search] Built TBLG θ=9.43°  n_atoms=148
+[search] Loading training data (POD_energy, level_of_theory=MBD)…
+[search] n_total=780  n_train=624  n_test=156  model=POD_energy
+[search] 0 tightened-grid trial(s) already completed (loaded from pod_hyperparam_search_results_tightened_MBD.json).
+[search] 54 valid configs (from 96 raw combinations in grid).
+
+====================================================================
+  config hash=8b0d993e35c442c4  ncoeff=40  rcut=6.0  reg=1e-12
+  bessel=2  inverse=8
+  2b=11  3b=4/4  4b=2/2  5b=0/0
+LAMMPS (19 Nov 2024 - Development - patch_2Jun2022-11538-g800a5f6310-modified)
+OMP_NUM_THREADS environment is not set. Defaulting to 1 thread. (src/comm.cpp:99)
+  using 1 OpenMP thread(s) per MPI task
+**************** Begin of POD Potentials ****************
+species: C 
+periodic boundary conditions: 1 1 1
+number of environment clusters: 1
+number of principal compoments: 1
+inner cut-off radius: 1
+outer cut-off radius: 6
+bessel polynomial degree: 2
+inverse polynomial degree: 8
+one-body potential: 1
+two-body radial basis functions: 11
+three-body radial basis functions: 4
+three-body angular degree: 4
+four-body radial basis functions: 2
+four-body angular degree: 2
+five-body radial basis functions: 0
+five-body angular degree: 0
+six-body radial basis functions: 0
+six-body angular degree: 0
+seven-body radial basis functions: 0
+seven-body angular degree: 0
+number of local descriptors per element for one-body potential: 1
+number of local descriptors per element for two-body potential: 11
+number of local descriptors per element for three-body potential: 20
+number of local descriptors per element for four-body potential: 8
+number of local descriptors per element for five-body potential: 0
+number of local descriptors per element for six-body potential: 0
+number of local descriptors per element for seven-body potential: 0
+number of local descriptors per element for all potentials: 40
+number of global descriptors: 40
+**************** End of POD Potentials ****************
+
+**************** Begin of Data File ****************
+file format: extxyz
+file extension: xyz
+path to training data set: TrainingData/
+path to test data set: TestData/
+path to environment configuration set: 
+basename for output files: C
+training fraction: 1
+test fraction: 1
+randomize training data set: 1
+randomize test data set: 1
+error analysis for training data set: 1
+error analysis for test data set: 0
+energy/force calculation for training data set: 0
+energy/force calculation for test data set: 0
+fitting weight for energy: 1000
+fitting weight for force: 1
+fitting weight for stress: 0
+save pod descriptors: 0
+compute pod descriptors: 0
+**************** End of Data File ****************
+**************** Begin of Training Data Set ****************
+--------------------------------------------------------
+ data file  | number of configurations | number of atoms
+--------------------------------------------------------
+ C_data.xyz |               624        |       39216
+--------------------------------------------------------
+number of files: 1
+number of configurations in all files: 624
+number of atoms in all files: 39216
+minimum number of atoms: 52
+maximum number of atoms: 76
+**************** End of Training Data Set ****************
+**************** Begin of Memory Allocation ****************
+maximum number of atoms in periodic domain: 76
+maximum number of atoms in extended domain: 2052
+maximum number of neighbors in extended domain: 155952
+size of double memory: 626880
+size of descriptor matrix: 40 x 40
+**************** End of Memory Allocation ****************
+**************** Begin of Least-Squares Fitting ****************
+Configuration: # 1
+Configuration: # 101
+Configuration: # 201
+Configuration: # 301
+Configuration: # 401
+Configuration: # 501
+Configuration: # 601
+**************** Begin of Error Calculation ****************
+Configuration: # 1
+Configuration: # 101
+Configuration: # 201
+Configuration: # 301
+Configuration: # 401
+Configuration: # 501
+Configuration: # 601
+**************** End of Error Calculation ****************
+**************** Begin of Error Analysis for the Training Data Set ****************
+--------------------------------------------------------------------------------------------
+     File     | # configs |  # atoms  | MAE energy  | RMSE energy | MAE force  | RMSE force
+--------------------------------------------------------------------------------------------
+C_data.xyz          624       39216     0.000945      0.001358      0.099448      0.140754  
+--------------------------------------------------------------------------------------------
+All files           624       39216     0.000945      0.001358      0.099448      0.140754  
+--------------------------------------------------------------------------------------------
+**************** End of Error Analysis for the Training Data Set ****************
+Total wall time: 0:00:14
+  [fit] done in 17.5s  n_pod=40
+  [test] MAE=0.806 meV/atom  RMSE=1.172 meV/atom
+  [tblg θ=21.78°] n_atoms=28 relaxing…
+  [tblg θ=21.78°] wrote cross section: /mnt/c/Users/Daniel/Documents/research/BLG_model_builder/uncertainty_quantification/pod_hyperparam_search/tmp_tblg_cross_section_theta_21.78.png
+  [tblg θ=21.78°] ✓  fmax_after=8.639035459482615e-05  AB=3.776 AA=3.787 min=3.775578650183249 max=3.7869631353387874 Å  4.8s
+  [tblg θ=9.43°] n_atoms=148 relaxing…
+  [tblg θ=9.43°] wrote cross section: /mnt/c/Users/Daniel/Documents/research/BLG_model_builder/uncertainty_quantification/pod_hyperparam_search/tmp_tblg_cross_section_theta_9.43.png
+  [tblg θ=9.43°] ✓  fmax_after=9.999949880487444e-05  AB=3.750 AA=3.788 min=3.7502843202649316 max=3.7875409510700706 Å  47.8s
+
+====================================================================
+  config hash=03f7ac1e54fa87ba  ncoeff=47  rcut=6.0  reg=1e-12
+  bessel=2  inverse=8
+  2b=8  3b=6/4  4b=2/2  5b=0/0
+LAMMPS (19 Nov 2024 - Development - patch_2Jun2022-11538-g800a5f6310-modified)
+OMP_NUM_THREADS environment is not set. Defaulting to 1 thread. (src/comm.cpp:99)
+  using 1 OpenMP thread(s) per MPI task
+**************** Begin of POD Potentials ****************
+species: C 
+periodic boundary conditions: 1 1 1
+number of environment clusters: 1
+number of principal compoments: 1
+inner cut-off radius: 1
+outer cut-off radius: 6
+bessel polynomial degree: 2
+inverse polynomial degree: 8
+one-body potential: 1
+two-body radial basis functions: 8
+three-body radial basis functions: 6
+three-body angular degree: 4
+four-body radial basis functions: 2
+four-body angular degree: 2
+five-body radial basis functions: 0
+five-body angular degree: 0
+six-body radial basis functions: 0
+six-body angular degree: 0
+seven-body radial basis functions: 0
+seven-body angular degree: 0
+number of local descriptors per element for one-body potential: 1
+number of local descriptors per element for two-body potential: 8
+number of local descriptors per element for three-body potential: 30
+number of local descriptors per element for four-body potential: 8
+number of local descriptors per element for five-body potential: 0
+number of local descriptors per element for six-body potential: 0
+number of local descriptors per element for seven-body potential: 0
+number of local descriptors per element for all potentials: 47
+number of global descriptors: 47
+**************** End of POD Potentials ****************
+
+**************** Begin of Data File ****************
+file format: extxyz
+file extension: xyz
+path to training data set: TrainingData/
+path to test data set: TestData/
+path to environment configuration set: 
+basename for output files: C
+training fraction: 1
+test fraction: 1
+randomize training data set: 1
+randomize test data set: 1
+error analysis for training data set: 1
+error analysis for test data set: 0
+energy/force calculation for training data set: 0
+energy/force calculation for test data set: 0
+fitting weight for energy: 1000
+fitting weight for force: 1
+fitting weight for stress: 0
+save pod descriptors: 0
+compute pod descriptors: 0
+**************** End of Data File ****************
+**************** Begin of Training Data Set ****************
+--------------------------------------------------------
+ data file  | number of configurations | number of atoms
+--------------------------------------------------------
+ C_data.xyz |               624        |       39216
+--------------------------------------------------------
+number of files: 1
+number of configurations in all files: 624
+number of atoms in all files: 39216
+minimum number of atoms: 52
+maximum number of atoms: 76
+**************** End of Training Data Set ****************
+**************** Begin of Memory Allocation ****************
+maximum number of atoms in periodic domain: 76
+maximum number of atoms in extended domain: 2052
+maximum number of neighbors in extended domain: 155952
+size of double memory: 736584
+size of descriptor matrix: 47 x 47
+**************** End of Memory Allocation ****************
+**************** Begin of Least-Squares Fitting ****************
+Configuration: # 1
+Configuration: # 101
+Configuration: # 201
+Configuration: # 301
+Configuration: # 401
+Configuration: # 501
+Configuration: # 601
+**************** Begin of Error Calculation ****************
+Configuration: # 1
+Configuration: # 101
+Configuration: # 201
+Configuration: # 301
+Configuration: # 401
+Configuration: # 501
+Configuration: # 601
+**************** End of Error Calculation ****************
+**************** Begin of Error Analysis for the Training Data Set ****************
+--------------------------------------------------------------------------------------------
+     File     | # configs |  # atoms  | MAE energy  | RMSE energy | MAE force  | RMSE force
+--------------------------------------------------------------------------------------------
+C_data.xyz          624       39216     0.001162      0.001690      0.124401      0.167954  
+--------------------------------------------------------------------------------------------
+All files           624       39216     0.001162      0.001690      0.124401      0.167954  
+--------------------------------------------------------------------------------------------
+**************** End of Error Analysis for the Training Data Set ****************
+Total wall time: 0:00:31
+  [fit] done in 35.2s  n_pod=47
+  [test] MAE=1.169 meV/atom  RMSE=1.673 meV/atom
+  [tblg θ=21.78°] n_atoms=28 relaxing…
+  [tblg θ=21.78°] wrote cross section: /mnt/c/Users/Daniel/Documents/research/BLG_model_builder/uncertainty_quantification/pod_hyperparam_search/tmp_tblg_cross_section_theta_21.78.png
+  [tblg θ=21.78°] ✗  fmax_after=9.730350168585929e-05  AB=4.511 AA=4.517 min=4.510880925429603 max=4.516786095844239 Å  11.6s
+  [tblg θ=9.43°] n_atoms=148 relaxing…
+  [tblg θ=9.43°] wrote cross section: /mnt/c/Users/Daniel/Documents/research/BLG_model_builder/uncertainty_quantification/pod_hyperparam_search/tmp_tblg_cross_section_theta_9.43.png
+  [tblg θ=9.43°] ✗  fmax_after=9.722629583525607e-05  AB=3.125 AA=5.278 min=3.1247185924923 max=5.277664557034683 Å  85.8s
+
+====================================================================
+  config hash=ed1c39402ce883a0  ncoeff=51  rcut=6.0  reg=1e-12
+  bessel=2  inverse=8
+  2b=12  3b=6/4  4b=2/2  5b=0/0
+LAMMPS (19 Nov 2024 - Development - patch_2Jun2022-11538-g800a5f6310-modified)
+OMP_NUM_THREADS environment is not set. Defaulting to 1 thread. (src/comm.cpp:99)
+  using 1 OpenMP thread(s) per MPI task
+**************** Begin of POD Potentials ****************
+species: C 
+periodic boundary conditions: 1 1 1
+number of environment clusters: 1
+number of principal compoments: 1
+inner cut-off radius: 1
+outer cut-off radius: 6
+bessel polynomial degree: 2
+inverse polynomial degree: 8
+one-body potential: 1
+two-body radial basis functions: 12
+three-body radial basis functions: 6
+three-body angular degree: 4
+four-body radial basis functions: 2
+four-body angular degree: 2
+five-body radial basis functions: 0
+five-body angular degree: 0
+six-body radial basis functions: 0
+six-body angular degree: 0
+seven-body radial basis functions: 0
+seven-body angular degree: 0
+number of local descriptors per element for one-body potential: 1
+number of local descriptors per element for two-body potential: 12
+number of local descriptors per element for three-body potential: 30
+number of local descriptors per element for four-body potential: 8
+number of local descriptors per element for five-body potential: 0
+number of local descriptors per element for six-body potential: 0
+number of local descriptors per element for seven-body potential: 0
+number of local descriptors per element for all potentials: 51
+number of global descriptors: 51
+**************** End of POD Potentials ****************
+
+**************** Begin of Data File ****************
+file format: extxyz
+file extension: xyz
+path to training data set: TrainingData/
+path to test data set: TestData/
+path to environment configuration set: 
+basename for output files: C
+training fraction: 1
+test fraction: 1
+randomize training data set: 1
+randomize test data set: 1
+error analysis for training data set: 1
+error analysis for test data set: 0
+energy/force calculation for training data set: 0
+energy/force calculation for test data set: 0
+fitting weight for energy: 1000
+fitting weight for force: 1
+fitting weight for stress: 0
+save pod descriptors: 0
+compute pod descriptors: 0
+**************** End of Data File ****************
+**************** Begin of Training Data Set ****************
+--------------------------------------------------------
+ data file  | number of configurations | number of atoms
+--------------------------------------------------------
+ C_data.xyz |               624        |       39216
+--------------------------------------------------------
+number of files: 1
+number of configurations in all files: 624
+number of atoms in all files: 39216
+minimum number of atoms: 52
+maximum number of atoms: 76
+**************** End of Training Data Set ****************
+**************** Begin of Memory Allocation ****************
+maximum number of atoms in periodic domain: 76
+maximum number of atoms in extended domain: 2052
+maximum number of neighbors in extended domain: 155952
+size of double memory: 799272
+size of descriptor matrix: 51 x 51
+**************** End of Memory Allocation ****************
+**************** Begin of Least-Squares Fitting ****************
+Configuration: # 1
+Configuration: # 101
+Configuration: # 201
+Configuration: # 301
+Configuration: # 401
+Configuration: # 501
+Configuration: # 601
+**************** Begin of Error Calculation ****************
+Configuration: # 1
+Configuration: # 101
+Configuration: # 201
+Configuration: # 301
+Configuration: # 401
+Configuration: # 501
+Configuration: # 601
+**************** End of Error Calculation ****************
+**************** Begin of Error Analysis for the Training Data Set ****************
+--------------------------------------------------------------------------------------------
+     File     | # configs |  # atoms  | MAE energy  | RMSE energy | MAE force  | RMSE force
+--------------------------------------------------------------------------------------------
+C_data.xyz          624       39216     0.000832      0.001225      0.091045      0.129807  
+--------------------------------------------------------------------------------------------
+All files           624       39216     0.000832      0.001225      0.091045      0.129807  
+--------------------------------------------------------------------------------------------
+**************** End of Error Analysis for the Training Data Set ****************
+Total wall time: 0:00:26
+  [fit] done in 29.9s  n_pod=51
+  [test] MAE=0.832 meV/atom  RMSE=1.208 meV/atom
+  [tblg θ=21.78°] n_atoms=28 relaxing…
+  [tblg θ=21.78°] wrote cross section: /mnt/c/Users/Daniel/Documents/research/BLG_model_builder/uncertainty_quantification/pod_hyperparam_search/tmp_tblg_cross_section_theta_21.78.png
+  [tblg θ=21.78°] ✗  fmax_after=9.862626426668383e-05  AB=4.357 AA=4.364 min=4.356784937538805 max=4.363762319857237 Å  12.9s
+  [tblg θ=9.43°] n_atoms=148 relaxing…
+  [tblg θ=9.43°] wrote cross section: /mnt/c/Users/Daniel/Documents/research/BLG_model_builder/uncertainty_quantification/pod_hyperparam_search/tmp_tblg_cross_section_theta_9.43.png
+  [tblg θ=9.43°] ✗  fmax_after=9.956962472158312e-05  AB=3.300 AA=5.628 min=3.299777117030935 max=5.628045371218285 Å  111.9s
+
+====================================================================
+  config hash=ad0686a601731f0a  ncoeff=77  rcut=6.0  reg=1e-12
+  bessel=2  inverse=8
+  2b=12  3b=8/6  4b=2/2  5b=0/0
+LAMMPS (19 Nov 2024 - Development - patch_2Jun2022-11538-g800a5f6310-modified)
+OMP_NUM_THREADS environment is not set. Defaulting to 1 thread. (src/comm.cpp:99)
+  using 1 OpenMP thread(s) per MPI task
+**************** Begin of POD Potentials ****************
+species: C 
+periodic boundary conditions: 1 1 1
+number of environment clusters: 1
+number of principal compoments: 1
+inner cut-off radius: 1
+outer cut-off radius: 6
+bessel polynomial degree: 2
+inverse polynomial degree: 8
+one-body potential: 1
+two-body radial basis functions: 12
+three-body radial basis functions: 8
+three-body angular degree: 6
+four-body radial basis functions: 2
+four-body angular degree: 2
+five-body radial basis functions: 0
+five-body angular degree: 0
+six-body radial basis functions: 0
+six-body angular degree: 0
+seven-body radial basis functions: 0
+seven-body angular degree: 0
+number of local descriptors per element for one-body potential: 1
+number of local descriptors per element for two-body potential: 12
+number of local descriptors per element for three-body potential: 56
+number of local descriptors per element for four-body potential: 8
+number of local descriptors per element for five-body potential: 0
+number of local descriptors per element for six-body potential: 0
+number of local descriptors per element for seven-body potential: 0
+number of local descriptors per element for all potentials: 77
+number of global descriptors: 77
+**************** End of POD Potentials ****************
+
+**************** Begin of Data File ****************
+file format: extxyz
+file extension: xyz
+path to training data set: TrainingData/
+path to test data set: TestData/
+path to environment configuration set: 
+basename for output files: C
+training fraction: 1
+test fraction: 1
+randomize training data set: 1
+randomize test data set: 1
+error analysis for training data set: 1
+error analysis for test data set: 0
+energy/force calculation for training data set: 0
+energy/force calculation for test data set: 0
+fitting weight for energy: 1000
+fitting weight for force: 1
+fitting weight for stress: 0
+save pod descriptors: 0
+compute pod descriptors: 0
+**************** End of Data File ****************
+**************** Begin of Training Data Set ****************
+--------------------------------------------------------
+ data file  | number of configurations | number of atoms
+--------------------------------------------------------
+ C_data.xyz |               624        |       39216
+--------------------------------------------------------
+number of files: 1
+number of configurations in all files: 624
+number of atoms in all files: 39216
+minimum number of atoms: 52
+maximum number of atoms: 76
+**************** End of Training Data Set ****************
+**************** Begin of Memory Allocation ****************
+maximum number of atoms in periodic domain: 76
+maximum number of atoms in extended domain: 2052
+maximum number of neighbors in extended domain: 155952
+size of double memory: 1206744
+size of descriptor matrix: 77 x 77
+**************** End of Memory Allocation ****************
+**************** Begin of Least-Squares Fitting ****************
+Configuration: # 1
+Configuration: # 101
+Configuration: # 201
+Configuration: # 301
+Configuration: # 401
+Configuration: # 501
+Configuration: # 601
+**************** Begin of Error Calculation ****************
+Configuration: # 1
+Configuration: # 101
+Configuration: # 201
+Configuration: # 301
+Configuration: # 401
+Configuration: # 501
+Configuration: # 601
+**************** End of Error Calculation ****************
+**************** Begin of Error Analysis for the Training Data Set ****************
+--------------------------------------------------------------------------------------------
+     File     | # configs |  # atoms  | MAE energy  | RMSE energy | MAE force  | RMSE force
+--------------------------------------------------------------------------------------------
+C_data.xyz          624       39216     0.000488      0.000678      0.053288      0.076890  
+--------------------------------------------------------------------------------------------
+All files           624       39216     0.000488      0.000678      0.053288      0.076890  
+--------------------------------------------------------------------------------------------
+**************** End of Error Analysis for the Training Data Set ****************
+Total wall time: 0:01:09
+  [fit] done in 74.3s  n_pod=77
+  [test] MAE=0.588 meV/atom  RMSE=0.940 meV/atom
+  [tblg θ=21.78°] n_atoms=28 relaxing…
+  [tblg θ=21.78°] wrote cross section: /mnt/c/Users/Daniel/Documents/research/BLG_model_builder/uncertainty_quantification/pod_hyperparam_search/tmp_tblg_cross_section_theta_21.78.png
+  [tblg θ=21.78°] ✓  fmax_after=5.30114424947788e-05  AB=3.561 AA=3.568 min=3.561373567679688 max=3.568044416867899 Å  10.2s
+  [tblg θ=9.43°] n_atoms=148 relaxing…
+  [tblg θ=9.43°] wrote cross section: /mnt/c/Users/Daniel/Documents/research/BLG_model_builder/uncertainty_quantification/pod_hyperparam_search/tmp_tblg_cross_section_theta_9.43.png
+  [tblg θ=9.43°] ✓  fmax_after=9.979537354310011e-05  AB=3.489 AA=3.662 min=3.4892309884926007 max=3.6621958091196163 Å  120.7s
+
+====================================================================
+  config hash=72d1279902e48168  ncoeff=112  rcut=6.0  reg=1e-12
+  bessel=2  inverse=8
+  2b=13  3b=10/8  4b=2/2  5b=0/0
+LAMMPS (19 Nov 2024 - Development - patch_2Jun2022-11538-g800a5f6310-modified)
+OMP_NUM_THREADS environment is not set. Defaulting to 1 thread. (src/comm.cpp:99)
+  using 1 OpenMP thread(s) per MPI task
+**************** Begin of POD Potentials ****************
+species: C 
+periodic boundary conditions: 1 1 1
+number of environment clusters: 1
+number of principal compoments: 1
+inner cut-off radius: 1
+outer cut-off radius: 6
+bessel polynomial degree: 2
+inverse polynomial degree: 8
+one-body potential: 1
+two-body radial basis functions: 13
+three-body radial basis functions: 10
+three-body angular degree: 8
+four-body radial basis functions: 2
+four-body angular degree: 2
+five-body radial basis functions: 0
+five-body angular degree: 0
+six-body radial basis functions: 0
+six-body angular degree: 0
+seven-body radial basis functions: 0
+seven-body angular degree: 0
+number of local descriptors per element for one-body potential: 1
+number of local descriptors per element for two-body potential: 13
+number of local descriptors per element for three-body potential: 90
+number of local descriptors per element for four-body potential: 8
+number of local descriptors per element for five-body potential: 0
+number of local descriptors per element for six-body potential: 0
+number of local descriptors per element for seven-body potential: 0
+number of local descriptors per element for all potentials: 112
+number of global descriptors: 112
+**************** End of POD Potentials ****************
+
+**************** Begin of Data File ****************
+file format: extxyz
+file extension: xyz
+path to training data set: TrainingData/
+path to test data set: TestData/
+path to environment configuration set: 
+basename for output files: C
+training fraction: 1
+test fraction: 1
+randomize training data set: 1
+randomize test data set: 1
+error analysis for training data set: 1
+error analysis for test data set: 0
+energy/force calculation for training data set: 0
+energy/force calculation for test data set: 0
+fitting weight for energy: 1000
+fitting weight for force: 1
+fitting weight for stress: 0
+save pod descriptors: 0
+compute pod descriptors: 0
+**************** End of Data File ****************
+**************** Begin of Training Data Set ****************
+--------------------------------------------------------
+ data file  | number of configurations | number of atoms
+--------------------------------------------------------
+ C_data.xyz |               624        |       39216
+--------------------------------------------------------
+number of files: 1
+number of configurations in all files: 624
+number of atoms in all files: 39216
+minimum number of atoms: 52
+maximum number of atoms: 76
+**************** End of Training Data Set ****************
+**************** Begin of Memory Allocation ****************
+maximum number of atoms in periodic domain: 76
+maximum number of atoms in extended domain: 2052
+maximum number of neighbors in extended domain: 155952
+size of double memory: 1755264
+size of descriptor matrix: 112 x 112
+**************** End of Memory Allocation ****************
+**************** Begin of Least-Squares Fitting ****************
+Configurati

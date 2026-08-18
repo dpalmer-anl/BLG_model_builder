@@ -189,7 +189,7 @@ def young_modulus_from_strain_energy(strains: np.ndarray, e_per_atom: np.ndarray
 
         n_layers = 2          # BLG
         n_atoms  = 4          # primitive bilayer cell
-        A_cell   = a0**2 * sqrt(3)/2   # Å²  (a0 ≈ 2.46 Å → A_cell ≈ 5.24 Å²)
+        A_cell   = a0**2 * sqrt(3)/2   # Å²  (a0 ≈ 2.4694 Å → A_cell ≈ 5.28 Å²)
         Y_2D_per_layer [N/m] = Y [eV/atom] * (n_atoms / n_layers) / A_cell * 16.0218
     """
     s = np.asarray(strains, dtype=float).ravel()

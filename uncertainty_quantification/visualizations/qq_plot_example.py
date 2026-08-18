@@ -104,7 +104,7 @@ MAE_dist = (np.mean(Ypred_posterior, axis=0) - Y_true)
 
 u = np.mean(Ypred_posterior.T <= Y_true[:, None], axis=1)
 
-TW_array = np.linspace(-1,2,20)
+TW_array = np.linspace(-1,0.1,10)
 TW_array = 10**TW_array
 ks_stat_array = np.zeros(len(TW_array))
 miscal_area_stat = np.zeros(len(TW_array))
@@ -138,12 +138,14 @@ uniform_quantiles = np.linspace(0, 1, len(Y_true))
 
 plt.figure()
 plt.plot(uniform_quantiles, u_sorted, 'o', label='PIT QQ')
+plt.fill_between(uniform_quantiles, u_sorted, np.linspace(0,1,len(u_sorted)), alpha=0.5)
 plt.plot([0, 1], [0, 1], 'k--', label='Ideal')
 plt.xlabel('Uniform quantiles')
 plt.ylabel('Empirical quantiles')
 plt.title('QQ plot for calibration')
 plt.legend()
-plt.show()
+plt.savefig('../figures/qq_plot_example.png')
+plt.clf()
 
 
 
@@ -156,6 +158,7 @@ uniform_quantiles = np.linspace(0, 1, len(Y_true))
 
 plt.figure()
 plt.plot(uniform_quantiles, u_sorted, 'o', label='PIT QQ')
+plt.fill_between(uniform_quantiles, u_sorted, np.linspace(0,1,len(u_sorted)), alpha=0.5)
 plt.plot([0, 1], [0, 1], 'k--', label='Ideal')
 plt.xlabel('Uniform quantiles')
 plt.ylabel('Ytrue Empirical quantiles')

@@ -65,11 +65,13 @@ from time import time
 
 MCMC_DEFAULTS = {
     "n_walkers_min": 100,
-    "n_samples": 100,
-    "walker_init_scale": 1e-6,
+    "n_samples": 20_000,
+    "chain_samples": 10_000,
+    "walker_init_scale": 1e-3,
     "test_size": 0.2,
     "relative_weight": 0.5,
-    "step_size": 0.1,
+    "step_size": 0.5,
+    "burnin":1000
 }
 
 
@@ -95,14 +97,23 @@ def _ravel_observation_blocks(y):
     return np.asarray(y_arr, dtype=float).ravel()
 
 
-def _mae_best_fit(y_true, y_pred):
-    """Mean absolute error for ndarray or list-of-per-structure blocks."""
+def _mae_best_fit(y_true, y_pred, *, x_train=None, model_block=None, params=None):
+    """Mean absolute error for ndarray or list-of-per-structure blocks.
+
+    When ``y_pred`` length does not match ``y_true`` (e.g. stale cache vs train
+    split), recompute predictions on ``x_train`` if a calculator is provided.
+    """
     yt = _ravel_observation_blocks(y_true)
     yp = _ravel_observation_blocks(y_pred)
     if yt.size != yp.size:
-        raise ValueError(
-            f"MAE length mismatch: y_true has {yt.size} values, y_pred has {yp.size}."
-        )
+        if x_train is not None and model_block is not None and params is not None:
+            yp = _ravel_observation_blocks(
+                get_prediction(model_block, x_train, params)
+            )
+        if yt.size != yp.size:
+            raise ValueError(
+                f"MAE length mismatch: y_true has {yt.size} values, y_pred has {yp.size}."
+            )
     return float(np.mean(np.abs(yt - yp)))
 
 
@@ -127,7 +138,7 @@ def worker(args):
     theta, model,x = args
     return get_prediction(model, x, theta)
 
-def evaluate_ensemble(ensemble_samples, x, y, model, pool=None, dataset_id="full"):
+def evaluate_ensemble(ensemble_samples, x, y, model, pool=None, dataset_id="full", verbose=True):
     """Evaluate ensemble samples; return ypred_samples (energy, forces when available) and clean_ensemble_samples.
 
     Parameters
@@ -141,6 +152,9 @@ def evaluate_ensemble(ensemble_samples, x, y, model, pool=None, dataset_id="full
     dataset_id : {"full", "test", "train"}
         Which pre-loaded xdata the workers should evaluate on.
         Ignored when ``pool`` is None (``x`` is used directly).
+    verbose : bool
+        If False, suppress per-key progress and shape logging (useful when
+        calling repeatedly in a tight loop).
     """
     ypred_samples = {}
     clean_ensemble_samples = {}
@@ -167,12 +181,13 @@ def evaluate_ensemble(ensemble_samples, x, y, model, pool=None, dataset_id="full
                 elapsed = time() - _t_eval
                 rate = done / elapsed if elapsed > 0 else 0
                 eta = (n_tasks - done) / rate if rate > 0 else float("nan")
-                print(
-                    f"  [evaluate_ensemble] {key} ({dataset_id}): "
-                    f"{done}/{n_tasks} samples  "
-                    f"({elapsed:.1f}s elapsed, ETA {eta:.0f}s)",
-                    flush=True,
-                )
+                if verbose:
+                    print(
+                        f"  [evaluate_ensemble] {key} ({dataset_id}): "
+                        f"{done}/{n_tasks} samples  "
+                        f"({elapsed:.1f}s elapsed, ETA {eta:.0f}s)",
+                        flush=True,
+                    )
         else:
             ypred_samples_list = [worker((theta[n, :], model[key], x[key]))
                                   for n in range(theta.shape[0])]
@@ -228,7 +243,8 @@ def evaluate_ensemble(ensemble_samples, x, y, model, pool=None, dataset_id="full
             ypreds = ypreds[~nan_ind]
             ypred_samples[key] = ypreds
             clean_ensemble_samples[key] = ensemble_samples[key][~nan_ind]
-        print("shape of cleaned " + key + " ensemble = ", np.shape(clean_ensemble_samples[key]))
+        if verbose:
+            print("shape of cleaned " + key + " ensemble = ", np.shape(clean_ensemble_samples[key]))
     return ypred_samples, clean_ensemble_samples
 
 
@@ -590,9 +606,9 @@ def log_probability(theta, x, y, T, model, weights,
     if n - _DIAG["lp_last_report"] >= _DIAG_REPORT_INTERVAL:
         _DIAG["lp_last_report"] = n
         mean_ms = _DIAG["lp_time"] / n * 1000
-        print(f"[timing] log_probability: {n} calls completed, "
-              f"mean {mean_ms:.1f} ms/call, "
-              f"cumulative {_DIAG['lp_time']:.1f}s", flush=True)
+        # print(f"[timing] log_probability: {n} calls completed, "
+        #       f"mean {mean_ms:.1f} ms/call, "
+        #       f"cumulative {_DIAG['lp_time']:.1f}s", flush=True)
 
     return log_prior - 0.5 * cost / T
 
@@ -681,7 +697,7 @@ def get_MCMC_ensemble(x, y, T, model, weights, theta_best_fit,
     )
 
     _t_run = time()
-    sampler.run_mcmc(theta_walkers, nsteps, progress=True)
+    sampler.run_mcmc(theta_walkers, nsteps, progress=False)
     _dt_run = time() - _t_run
     print(f"[timing] sampler.run_mcmc: {_dt_run:.2f}s total  |  "
           f"{_dt_run / nsteps:.2f}s/step  |  "
@@ -690,9 +706,27 @@ def get_MCMC_ensemble(x, y, T, model, weights, theta_best_fit,
 
     acceptance_fraction = sampler.acceptance_fraction
     print("Mean acceptance fraction: {:.8f}".format(np.mean(acceptance_fraction)))
-    samples = sampler.get_chain(flat=True)
-    if len(samples) > 1000:
-        samples = samples[::int(len(samples) / 1000)]
+
+    default_burnin = int(MCMC_DEFAULTS["burnin"])
+    if nsteps <= default_burnin:
+        burnin = nsteps // 2
+        print(
+            f"  burnin={burnin} (capped from {default_burnin} because "
+            f"nsteps={nsteps})",
+            flush=True,
+        )
+    else:
+        burnin = default_burnin
+
+    samples = sampler.get_chain(flat=True, discard=burnin)
+    if samples.size == 0:
+        raise ValueError(
+            f"MCMC produced no posterior samples after discarding burnin={burnin} "
+            f"of {nsteps} steps. Increase --nsteps (or --n-steps) so that "
+            f"nsteps > burnin ({default_burnin} by default)."
+        )
+    if len(samples) > MCMC_DEFAULTS["chain_samples"]:
+        samples = samples[::int(len(samples) / MCMC_DEFAULTS["chain_samples"])]
 
     print("Shape of ensemble =", np.shape(samples))
     sample_dict = {}
@@ -754,9 +788,9 @@ descriptor), e.g. ensemble directories under
         default=None,
         dest="pod_index",
         help=(
-            "Select a POD potential by index into use_pod_models_hash.txt "
-            "(0-based). Each line is a hyperparameter-search hash; rows are "
-            "looked up in pod_hyperparam_search_results.csv."
+            "Select a POD potential by 0-based row index in "
+            "pod_hyperparam_search.csv. The row's hash must "
+            "have an associated pod_hyperparam_search_cache fit."
         ),
     )
     parser.add_argument(
@@ -799,6 +833,18 @@ descriptor), e.g. ensemble directories under
             "for batch-backed calculators that run LAMMPS on all configs regardless."
         ),
     )
+    parser.add_argument(
+        "--n-steps",
+        "--nsteps",
+        "--n-samples",
+        type=int,
+        default=None,
+        dest="n_steps",
+        help=(
+            f"Number of MCMC steps "
+            f"(default: {MCMC_DEFAULTS['n_samples']} from MCMC_DEFAULTS)."
+        ),
+    )
     add_hyperparam_args(parser)
     args, _unknown = parser.parse_known_args()
     cli_hyperparams = collect_workflow_hyperparams(args, _unknown)
@@ -808,7 +854,7 @@ descriptor), e.g. ensemble directories under
     from blg_model_builder.pod_model_selection import pod_hyperparams_for_index
 
     def _pod_hyperparams_from_search_index(pod_index: int):
-        """Return (pod_hyperparams, pod_cutoff, hash) for ``use_pod_models_hash.txt`` index."""
+        """Return hyperparameters/cutoff/hash for a tightened-CSV row."""
         return pod_hyperparams_for_index(pod_index)
 
     def _get_mcmc_kw():
@@ -847,7 +893,7 @@ descriptor), e.g. ensemble directories under
     # process runs get_MCMC_inputs; workers run it inside _pool_initializer.
     print("[timing] starting get_MCMC_inputs ...", flush=True)
     _t0 = time()
-    if args.pod_index is not None and args.model_name in ("POD_energy", "TETB_POD"):
+    if args.pod_index is not None and args.model_name in ("POD_energy", "PODD3_energy", "TETB_POD"):
         print(
             f"[EMCEE] POD_index={int(args.pod_index)} "
             f"(hash={_mcmc_kw.get('pod_hash', 'unknown')}, "
@@ -860,7 +906,13 @@ descriptor), e.g. ensemble directories under
     print(f"[timing] get_MCMC_inputs: {time() - _t0:.2f}s", flush=True)
 
     for key in calc:
-        mae = _mae_best_fit(ydata_train[key], ypred_bestfit[key])
+        mae = _mae_best_fit(
+            ydata_train[key],
+            ypred_bestfit[key],
+            x_train=xdata_train.get(key),
+            model_block=calc[key],
+            params=params[key],
+        )
         print(key, " MAE from best fit =", mae)
 
     if not os.path.exists("ensembles/" + model_name + "/"):
@@ -933,7 +985,7 @@ descriptor), e.g. ensemble directories under
     try:
         ensemble_samples, acceptance_fraction = get_MCMC_ensemble(
             xdata_train, ydata_train, Temperature, calc, w0,
-            params, bounds, step_size=step_size,
+            params, bounds, N_samples=args.n_steps, step_size=step_size,
             pool=pool,
         )
         print(f"[timing] get_MCMC_ensemble: {time() - _t0:.2f}s", flush=True)
@@ -965,12 +1017,11 @@ descriptor), e.g. ensemble directories under
         ens_keys = list(ensemble_samples.keys())
 
         if args.eval_full:
-            # Evaluate on the full dataset. For batch-backed energy calculators
-            # (``_make_batch_evaluator``), each sample already runs LAMMPS on *all*
-            # configs; a separate ``dataset_id='test'`` pass repeats that full cost
-            # without saving work — easily ~2× runtime. Test-set predictions are
-            # obtained by slicing columns when layouts match (see
-            # ``slice_ypred_test_from_full``).
+            # Evaluate on the full dataset. For descriptor-backed POD energy
+            # (``_make_pod_descriptor_evaluator``), each sample is a NumPy dot
+            # product over precomputed descriptors; a separate ``dataset_id='test'``
+            # pass repeats that cheap work. Test-set predictions are obtained by
+            # slicing columns when layouts match (see ``slice_ypred_test_from_full``).
             ypred_samples, _ = evaluate_ensemble(
                 ensemble_samples, xdata, ydata, calc,
                 pool=pool, dataset_id="full",

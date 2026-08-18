@@ -4,6 +4,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import scipy.optimize
 import os
+import shutil
+import tempfile
 import time
 import pickle
 import subprocess
@@ -168,13 +170,18 @@ def fit_pod(
         Default 1.
     """
     original_dir = os.getcwd()
-    os.mkdir("tmp_pod_fit")
-    os.chdir("tmp_pod_fit")
+    # Unique per-call directory avoids FileExistsError when a previous fit left
+    # ``tmp_pod_fit`` behind (common on WSL/NTFS) or when two fits overlap.
+    stale = os.path.join(original_dir, "tmp_pod_fit")
+    if os.path.isdir(stale):
+        shutil.rmtree(stale, ignore_errors=True)
+    fit_dir = tempfile.mkdtemp(prefix="tmp_pod_fit_", dir=original_dir)
+    os.chdir(fit_dir)
     try:
         os.mkdir("TrainingData")
         os.mkdir("TestData")
-        ase.io.write("TrainingData/C_data.xyz",atoms_list, format="extxyz")
-        ase.io.write("TestData/C_data.xyz",atoms_list, format="extxyz")
+        ase.io.write("TrainingData/C_data.xyz", atoms_list, format="extxyz")
+        ase.io.write("TestData/C_data.xyz", atoms_list, format="extxyz")
         with open("C_param.pod", "w") as f:
             f.write(hyperparams_str)
 
@@ -194,16 +201,24 @@ def fit_pod(
             )
 
         with open("fit.pod", "w") as f:
-            f.write("units metal\n\
-                    fitpod C_param.pod C_data.pod")
+            f.write(
+                "units metal\n"
+                "fitpod C_param.pod C_data.pod"
+            )
 
-        subprocess.call(lammps_exec+" -in fit.pod",shell=True)
-        best_fit_params = np.loadtxt("C_coefficients.pod",skiprows=1)
+        subprocess.call(lammps_exec + " -in fit.pod", shell=True)
+        coeff_path = "C_coefficients.pod"
+        if not os.path.isfile(coeff_path):
+            raise FileNotFoundError(
+                f"{coeff_path} not found after fitpod. "
+                f"LAMMPS executable likely failed: {lammps_exec!r}. "
+                "Check that liblammps.so.0 is loadable "
+                "(e.g. set LAMMPS_EXECUTABLE and LD_LIBRARY_PATH)."
+            )
+        best_fit_params = np.loadtxt(coeff_path, skiprows=1)
     finally:
         os.chdir(original_dir)
-        import shutil
-        if os.path.isdir("tmp_pod_fit"):
-            shutil.rmtree("tmp_pod_fit")
+        shutil.rmtree(fit_dir, ignore_errors=True)
     return best_fit_params
 
 

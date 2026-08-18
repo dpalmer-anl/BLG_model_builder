@@ -1,25 +1,111 @@
 # use_pod_models_hash.txt — POD_index is 0-based line index (comments skipped)
-# Selected: best test RMSE + 9 random (seed=42, ncoeff>50)
-# index  hash  ncoeff  test_rmse_eV_per_atom
-# 0  09fdb1c2b98eb30e  ncoeff=53  rmse=0.00267812
-# 1  e5aa13cf8af6707f  ncoeff=97  rmse=0.00685244
-# 2  16d17eb35e60b296  ncoeff=51  rmse=0.00401786
-# 3  6cb38c0d6180272c  ncoeff=73  rmse=0.00513164
-# 4  e1a7bb04e39ffd6c  ncoeff=65  rmse=0.00588479
-# 5  cf2bf192ec4363a5  ncoeff=103  rmse=0.0071073
-# 6  b4df8c81b083ad2d  ncoeff=51  rmse=0.00825461
-# 7  c13280467cd94612  ncoeff=103  rmse=0.00827115
-# 8  d7fa52ee6726c031  ncoeff=63  rmse=0.00948658
-# 9  644e1a68b4a900a3  ncoeff=97  rmse=0.0126063
-# 10  5bd63334e303b3a9  ncoeff=99  rmse=0.0153293
-09fdb1c2b98eb30e
-e5aa13cf8af6707f
-16d17eb35e60b296
-6cb38c0d6180272c
-e1a7bb04e39ffd6c
-cf2bf192ec4363a5
-b4df8c81b083ad2d
-c13280467cd94612
-d7fa52ee6726c031
-644e1a68b4a900a3
-5bd63334e303b3a9
+# All 54 trials from pod_hyperparam_search_results_tightened.csv (CSV row order)
+# index  hash  ncoeff  test_rmse_eV_per_atom  meets_all_criteria
+# 0  11aed783b2e7aaff  ncoeff=86  rmse=0.00388047  pass=False
+# 1  9579db3e174b3d03  ncoeff=93  rmse=0.00463904  pass=True
+# 2  31f2e2746e2f74b4  ncoeff=97  rmse=0.00426119  pass=True
+# 3  a0621b22fd1f3248  ncoeff=123  rmse=0.00426176  pass=False
+# 4  832518108a8ea13f  ncoeff=158  rmse=0.0046615  pass=False
+# 5  879e81d39f305ea3  ncoeff=136  rmse=0.0048925  pass=True
+# 6  82af23f829e121ed  ncoeff=104  rmse=0.00410108  pass=True
+# 7  2b7b52743db83213  ncoeff=118  rmse=0.00436483  pass=True
+# 8  f36ddfe36a7d4fba  ncoeff=136  rmse=0.00432077  pass=False
+# 9  948871a365eedb46  ncoeff=137  rmse=0.00489819  pass=True
+# 10  a6653a472fa55c76  ncoeff=139  rmse=0.0049323  pass=False
+# 11  a9782144ce8c6fc4  ncoeff=108  rmse=0.00421089  pass=False
+# 12  903138bf8d0b17a0  ncoeff=107  rmse=0.00416538  pass=False
+# 13  bdabd8292e2f6d0f  ncoeff=85  rmse=0.00385918  pass=True
+# 14  9bd57345facf8dd3  ncoeff=115  rmse=0.0047147  pass=True
+# 15  dc9af1c67d1cec98  ncoeff=107  rmse=0.00458641  pass=True
+# 16  9d9459527f6ddac0  ncoeff=108  rmse=0.00435708  pass=True
+# 17  1272ab8f21dd14f2  ncoeff=88  rmse=0.00385537  pass=False
+# 18  b432849f91ef0e94  ncoeff=92  rmse=0.00459929  pass=True
+# 19  542fd28f964726f6  ncoeff=135  rmse=0.00446181  pass=False
+# 20  43da3ef6c8f3b04d  ncoeff=122  rmse=0.0042874  pass=False
+# 21  79bc1797a80544d9  ncoeff=155  rmse=0.00457566  pass=False
+# 22  c139cc0101df5d1b  ncoeff=124  rmse=0.00429126  pass=False
+# 23  2905348c9cf2dec7  ncoeff=103  rmse=0.00499664  pass=True
+# 24  ccc144728d620013  ncoeff=140  rmse=0.00511488  pass=True
+# 25  5b52231bdab43ff2  ncoeff=105  rmse=0.00469794  pass=True
+# 26  a4f202cc9d2839f8  ncoeff=96  rmse=0.00426122  pass=True
+# 27  81759984b822ac91  ncoeff=157  rmse=0.00462116  pass=False
+# 28  6be88455fffc8934  ncoeff=120  rmse=0.00430913  pass=False
+# 29  4a1d265a297b09fc  ncoeff=98  rmse=0.00424842  pass=True
+# 30  e1a48afa1b498b23  ncoeff=138  rmse=0.00518211  pass=True
+# 31  402fcc6f618f23a0  ncoeff=104  rmse=0.00481008  pass=True
+# 32  7b82f2858065f494  ncoeff=82  rmse=0.00414092  pass=True
+# 33  614174a86dfb4e66  ncoeff=106  rmse=0.00458359  pass=True
+# 34  048b4cdfca2e637f  ncoeff=119  rmse=0.00438266  pass=False
+# 35  f0bd854054bfdb7b  ncoeff=117  rmse=0.00457633  pass=False
+# 36  aefa8486978ac5b7  ncoeff=110  rmse=0.00425348  pass=False
+# 37  3bc509a1ad6cc828  ncoeff=83  rmse=0.00411698  pass=True
+# 38  47289f1fa2e1436e  ncoeff=109  rmse=0.00424506  pass=False
+# 39  ba385a7ef1dfd848  ncoeff=135  rmse=0.00493361  pass=True
+# 40  cff017bf9ed942ac  ncoeff=121  rmse=0.00430093  pass=False
+# 41  7e12ee3858b61c41  ncoeff=95  rmse=0.00432561  pass=True
+# 42  e3222afc5bb05d2c  ncoeff=156  rmse=0.00465161  pass=False
+# 43  ca875f424c8281f6  ncoeff=81  rmse=0.00414211  pass=True
+# 44  f558d2e9a9d4e6b4  ncoeff=84  rmse=0.00388727  pass=True
+# 45  d5efca0846541417  ncoeff=137  rmse=0.00431183  pass=False
+# 46  466a20c7b2aded25  ncoeff=106  rmse=0.00417753  pass=False
+# 47  aef1b6e45e4e57ee  ncoeff=138  rmse=0.00418703  pass=False
+# 48  093880ce31fa702f  ncoeff=103  rmse=0.0040491  pass=False
+# 49  1154205fb18d1b78  ncoeff=87  rmse=0.0038726  pass=False
+# 50  de981b74579ddf74  ncoeff=116  rmse=0.00457333  pass=False
+# 51  19c76e3ebfdb72c9  ncoeff=91  rmse=0.00448468  pass=True
+# 52  d0adb7adc71538e1  ncoeff=94  rmse=0.00443384  pass=True
+# 53  781aa67b53889f01  ncoeff=105  rmse=0.00414595  pass=False
+11aed783b2e7aaff
+9579db3e174b3d03
+31f2e2746e2f74b4
+a0621b22fd1f3248
+832518108a8ea13f
+879e81d39f305ea3
+82af23f829e121ed
+2b7b52743db83213
+f36ddfe36a7d4fba
+948871a365eedb46
+a6653a472fa55c76
+a9782144ce8c6fc4
+903138bf8d0b17a0
+bdabd8292e2f6d0f
+9bd57345facf8dd3
+dc9af1c67d1cec98
+9d9459527f6ddac0
+1272ab8f21dd14f2
+b432849f91ef0e94
+542fd28f964726f6
+43da3ef6c8f3b04d
+79bc1797a80544d9
+c139cc0101df5d1b
+2905348c9cf2dec7
+ccc144728d620013
+5b52231bdab43ff2
+a4f202cc9d2839f8
+81759984b822ac91
+6be88455fffc8934
+4a1d265a297b09fc
+e1a48afa1b498b23
+402fcc6f618f23a0
+7b82f2858065f494
+614174a86dfb4e66
+048b4cdfca2e637f
+f0bd854054bfdb7b
+aefa8486978ac5b7
+3bc509a1ad6cc828
+47289f1fa2e1436e
+ba385a7ef1dfd848
+cff017bf9ed942ac
+7e12ee3858b61c41
+e3222afc5bb05d2c
+ca875f424c8281f6
+f558d2e9a9d4e6b4
+d5efca0846541417
+466a20c7b2aded25
+aef1b6e45e4e57ee
+093880ce31fa702f
+1154205fb18d1b78
+de981b74579ddf74
+19c76e3ebfdb72c9
+d0adb7adc71538e1
+781aa67b53889f01

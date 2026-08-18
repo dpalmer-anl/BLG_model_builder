@@ -33,6 +33,7 @@ def checkpoint_tag(checkpoint_path: str | Path) -> str:
 
 def _allegro_search_roots() -> List[Path]:
     roots = [
+        _REPO_ROOT / "uncertainty_quantification" / "allegro_blg_rcut6",
         _REPO_ROOT / "uncertainty_quantification" / "initial_allegro_tests",
         _REPO_ROOT / "uncertainty_quantification",
         _REPO_ROOT,
@@ -59,19 +60,24 @@ def resolve_allegro_checkpoint(path: str | Path | None = None) -> Path:
         return _DEFAULT_CHECKPOINT.resolve()
 
     for root in _allegro_search_roots():
-        out_dir = root / "allegro_blg_output"
-        for name in _DEFAULT_CHECKPOINT_FALLBACKS:
-            candidate = out_dir / name
-            if candidate.is_file():
-                return candidate.resolve()
-        candidates = sorted(out_dir.glob("best*.ckpt"))
-        if candidates:
-            return candidates[-1].resolve()
+        # Root may itself be a model directory (e.g. allegro_blg_rcut6).
+        search_dirs = [root, root / "allegro_blg_output", root / "allegro_blg_rcut6"]
+        for out_dir in search_dirs:
+            if not out_dir.is_dir():
+                continue
+            for name in _DEFAULT_CHECKPOINT_FALLBACKS:
+                candidate = out_dir / name
+                if candidate.is_file():
+                    return candidate.resolve()
+            candidates = sorted(out_dir.glob("best*.ckpt"))
+            if candidates:
+                return max(candidates, key=lambda p: p.stat().st_mtime).resolve()
 
     raise FileNotFoundError(
         "No Allegro checkpoint found. Train one with "
-        "uncertainty_quantification/initial_allegro_tests/fit_allegro.py or pass "
-        "allegro_checkpoint=..."
+        "uncertainty_quantification/fit_allegro_and_relax.py or "
+        "uncertainty_quantification/initial_allegro_tests/fit_allegro.py, "
+        "or pass allegro_checkpoint=..."
     )
 
 

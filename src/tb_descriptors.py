@@ -54,6 +54,53 @@ def _chebyshev(x, M: int):
     return T
  
  
+def _add_triplet_contributions(
+    three_body, p_v_cpu, q_v_cpu, s_v_cpu, pair_v, pair_r, cheb, W: int,
+) -> None:
+    """
+    Accumulate angular (three-body) contributions for a batch of triplets
+    into ``three_body`` in-place.
+
+    Index arrays (p_v_cpu, q_v_cpu, s_v_cpu) are always CPU/numpy — they are
+    transferred to the active device here.  Keeping index computation on CPU
+    avoids CuPy dynamic-allocation kernels (nonzero, boolean-mask on broadcast
+    views) that can trigger CUDA_ERROR_ILLEGAL_ADDRESS at module teardown.
+    The large math arrays (pair_v, pair_r, cheb, three_body) stay on device.
+
+    Parameters
+    ----------
+    three_body : xp array (n_pairs, M, W)
+    p_v_cpu    : (n,) numpy int64 — primary bond indices
+    q_v_cpu    : (n,) numpy int64 — secondary bond indices
+    s_v_cpu    : (n,) numpy float64 — sign (+1 or -1)
+    pair_v     : (n_pairs, 3) xp float
+    pair_r     : (n_pairs,)   xp float
+    cheb       : (n_pairs, M) xp float (envelope-scaled)
+    W          : int
+    """
+    # Transfer index arrays to device (no-op when xp = _np)
+    p_v = xp.asarray(p_v_cpu)
+    q_v = xp.asarray(q_v_cpu)
+    s_v = xp.asarray(s_v_cpu)
+
+    cos_th = s_v * xp.einsum('nd,nd->n', pair_v[p_v], pair_v[q_v]) / (
+        pair_r[p_v] * pair_r[q_v]
+    )
+    xp.clip(cos_th, -1.0, 1.0, out=cos_th)
+    cos_pw = xp.empty((len(p_v), W), dtype=xp.float64)
+    cos_pw[:, 0] = cos_th
+    for w in range(1, W):
+        cos_pw[:, w] = cos_pw[:, w - 1] * cos_th
+    contrib = cheb[q_v][:, :, xp.newaxis] * cos_pw[:, xp.newaxis, :]  # (n, M, W)
+    if _GPU:
+        cupyx.scatter_add(three_body, p_v, contrib)
+    else:
+        _np.add.at(three_body, p_v, contrib)
+    # Local variables (cos_th, cos_pw, contrib, p_v, q_v, s_v) go out of scope here.
+    # CuPy's stream-ordered memory pool ensures GPU kernels complete before memory
+    # is reused — no explicit del needed.
+
+
 def _build_triplet_indices(pair_i: _np.ndarray, pair_j: _np.ndarray, N: int):
     """
     For every directed half-list bond p = (i → j), enumerate secondary bonds
@@ -115,8 +162,6 @@ def _build_triplet_indices(pair_i: _np.ndarray, pair_j: _np.ndarray, N: int):
         xp.cumsum(cnt_c[:-1], out=off_c[1:])
         xp.cumsum(cnt_t[:-1], out=off_t[1:])
 
-    p_idx = xp.arange(n, dtype=xp.int64)
-
     # ── Vectorised expand-and-filter ────────────────────────────────────────
     # For each primary bond p, expand every secondary bond q from the group
     # selected by atom_sel[p], then discard pairs where excl_q[q]==excl_p[p].
@@ -138,18 +183,18 @@ def _build_triplet_indices(pair_i: _np.ndarray, pair_j: _np.ndarray, N: int):
         _cum[0] = 0
         xp.cumsum(grp_size, out=_cum[1:])
 
-        # Expand primary bond indices (repeated by group size)
-        t_p_raw = xp.repeat(p_idx, grp_size)                   # (total,)
+        # Expand each primary bond p by grp_size[p] without xp.repeat(array):
+        # CuPy rejects ndarray `repeats`, so map flat index g → primary p via searchsorted.
+        flat    = xp.arange(total, dtype=xp.int64)
+        t_p_raw = xp.searchsorted(_cum, flat, side='right') - 1     # (total,)
 
         # Secondary bond index = CSR_start[p] + intra_offset
-        # = (off[atom_sel[p]] - _cum[p]) + global_arange
-        base    = off[atom_sel] - _cum[:-1]                    # (n,)
-        idx_arr = xp.repeat(base, grp_size)
-        idx_arr += xp.arange(total, dtype=xp.int64)            # in-place add
-        t_q_raw = order[idx_arr]                               # (total,)
+        idx_arr = off[atom_sel[t_p_raw]] + flat - _cum[t_p_raw]     # (total,)
+        t_q_raw = order[idx_arr]
 
-        # Drop "self" bonds: excl_q[q] == excl_p[p]
-        keep  = excl_q[t_q_raw] != xp.repeat(excl_p, grp_size)
+        # Drop the primary partner *image*, not every bond to the same atom
+        # index (other periodic images of j must remain as k-legs).
+        keep  = excl_q[t_q_raw] != excl_p[t_p_raw]
         n_keep = int(keep.sum())                               # D2H sync for xp.full
         if n_keep == 0:
             return
@@ -271,67 +316,125 @@ def get_acsf_hopping_descriptors(
     # ── Chebyshev radial basis ──────────────────────────────────────────────
     x_ij = (2.0 * pair_r - (r_inner_cut + r_cut)) / (r_cut - r_inner_cut)
     cheb  = _chebyshev(x_ij, M)                              # (n_pairs, M)
+    del x_ij
 
     if use_envelope:
         fc   = 0.5 * (xp.cos(_np.pi * pair_r / r_cut) + 1.0)
         cheb = cheb * fc[:, xp.newaxis]
+        del fc
 
-    two_body = cheb  # (n_pairs, M)
+    two_body = cheb  # (n_pairs, M)  — alias; cheb kept for three-body use below
 
     if W == 0:
+        del pair_r
         return two_body, (pair_i, pair_j, pair_v)
 
-    # ── Three-body block ────────────────────────────────────────────────────
+    # ── Three-body block (atom-by-atom loop) ────────────────────────────────
+    # Peak GPU memory is O((bonds/atom)² × M × W) rather than O(n_triplets × M × W),
+    # making the computation scalable to large supercells.
+    #
+    # For each atom a we form the cross-product of:
+    #   Group A — primary bonds p where pair_i[p]==a (a is bond centre)
+    #             vs. a's full environment (fwd: sign +1, rev: sign -1)
+    #   Group B — primary bonds p where pair_j[p]==a (a is bond target)
+    #             vs. a's full environment (fwd: sign -1, rev: sign +1)
+    # and scatter-add the angular contributions into three_body[p].
+    #
+    # Exclude the primary partner *image* (same Cartesian endpoint), not the
+    # partner atom index.  Index exclusion drops other periodic images of j
+    # that still lie inside r_cut — wrong for small PBC training cells (N=4)
+    # while large TBLG cells keep those k-legs.
+
     three_body = xp.zeros((n_pairs, M, W), dtype=xp.float64)
 
-    # _build_triplet_indices now runs on the active device (GPU or CPU) and
-    # returns xp-arrays directly — no transfer required.
-    t_p, t_q, t_sign = _build_triplet_indices(pair_i, pair_j, N)
+    # CSR bond lookup — built entirely on CPU.
+    # All index arithmetic (nonzero, masking, concatenation) stays on CPU to avoid
+    # CuPy dynamic-allocation kernels that trigger CUDA_ERROR_ILLEGAL_ADDRESS.
+    order_center = _np.argsort(pair_i, kind='stable').astype(_np.int64)
+    order_target = _np.argsort(pair_j, kind='stable').astype(_np.int64)
+    cnt_c = _np.bincount(pair_i, minlength=N).astype(_np.int64)
+    cnt_t = _np.bincount(pair_j, minlength=N).astype(_np.int64)
+    off_c = _np.empty(N, dtype=_np.int64); off_c[0] = 0
+    off_t = _np.empty(N, dtype=_np.int64); off_t[0] = 0
+    if N > 1:
+        _np.cumsum(cnt_c[:-1], out=off_c[1:])
+        _np.cumsum(cnt_t[:-1], out=off_t[1:])
 
-    if len(t_p) > 0:
-        v_p = pair_v[t_p]           # (n_triplets, 3)
-        v_q = pair_v[t_q]
-        r_p = pair_r[t_p]           # (n_triplets,)
-        r_q = pair_r[t_q]
+    # Bond vectors on CPU for image-aware k-leg exclusion.
+    pair_v_cpu = pair_v.get() if hasattr(pair_v, "get") else pair_v
+    pair_v_cpu = _np.asarray(pair_v_cpu, dtype=_np.float64)
+    _same_image_tol2 = 1e-16  # Å²
 
-        # cos(angle between primary bond r_ij and secondary bond r_ik).
-        # For forward bonds: r_ik = +pair_v[q]  → cos = dot(v_p, v_q)/(r_p r_q)
-        # For reverse bonds: r_ik = -pair_v[q'] → cos = -dot(v_p, v_q')/(r_p r_q')
-        # Encoded as: cos_theta = t_sign * dot(v_p, v_q) / (r_p * r_q)
-        cos_theta = t_sign * xp.einsum("nd,nd->n", v_p, v_q) / (r_p * r_q)
-        xp.clip(cos_theta, -1.0, 1.0, out=cos_theta)
+    for a in range(N):
+        n_pc = int(cnt_c[a])   # bonds where pair_i[q]==a
+        n_pt = int(cnt_t[a])   # bonds where pair_j[q]==a
+        n_env = n_pc + n_pt
+        if n_env < 2:
+            continue
 
-        cos_pw = xp.empty((len(t_p), W), dtype=xp.float64)
-        cos_pw[:, 0] = cos_theta
-        for w in range(1, W):
-            cos_pw[:, w] = cos_pw[:, w - 1] * cos_theta
+        # Bond indices for atom a's environment — CPU int64 views (no copy)
+        c0 = int(off_c[a]); t0 = int(off_t[a])
+        pc = order_center[c0 : c0 + n_pc]
+        pt = order_target[t0 : t0 + n_pt]
 
-        cheb_q  = cheb[t_q]                                 # (n_triplets, M)
-        contrib = cheb_q[:, :, xp.newaxis] * cos_pw[:, xp.newaxis, :]  # (n_triplets, M, W)
+        q_env = _np.concatenate([pc, pt]).astype(_np.int64)  # (n_env,)
+        # Displacement from a to the other end of each env bond.
+        k_pos = _np.concatenate(
+            [pair_v_cpu[pc], -pair_v_cpu[pt]], axis=0,
+        )  # (n_env, 3)
 
-        # Scatter Σ_k contributions into primary-pair slots.
-        # GPU: cupyx.scatter_add (fast).
-        # CPU: scipy sparse matmul — drastically faster than np.add.at for large arrays.
-        if _GPU:
-            cupyx.scatter_add(three_body, t_p, contrib)
-        else:
-            nt = len(t_p)
-            # Build (n_pairs × n_triplets) sparse indicator: entry [p, k] = 1 when t_p[k] == p
-            smat = _sparse.csr_matrix(
-                (_np.ones(nt, dtype=_np.float64), (t_p, _np.arange(nt))),
-                shape=(n_pairs, nt),
-            )
-            three_body += (smat @ contrib.reshape(nt, M * W)).reshape(n_pairs, M, W)
+        # ── Group A: p ∈ pc (pair_i[p]==a), primary direction = +pair_v[p] ─
+        # sign: +1 for fwd secondaries (q∈pc), -1 for rev secondaries (q∈pt)
+        if n_pc > 0:
+            sign_A = _np.concatenate([
+                _np.ones(n_pc,  dtype=_np.float64),
+                -_np.ones(n_pt, dtype=_np.float64),
+            ])
+            j_pos = pair_v_cpu[pc]  # (n_pc, 3)
+            d2 = _np.sum((k_pos[_np.newaxis, :, :] - j_pos[:, _np.newaxis, :]) ** 2, axis=2)
+            mask_A = d2 > _same_image_tol2
+            idx_p, idx_q = _np.nonzero(mask_A)
+            if idx_p.size > 0:
+                _add_triplet_contributions(
+                    three_body,
+                    pc[idx_p],        # CPU int64
+                    q_env[idx_q],     # CPU int64
+                    sign_A[idx_q],    # CPU float64
+                    pair_v, pair_r, cheb, W,
+                )
 
-        # Multiply by cheb[p] (radial basis of primary bond) then normalise.
-        # The factor of 0.5 averages the contributions from atom i's and atom j's
-        # environments, ensuring φ₃_sym(i→j) = φ₃_sym(j→i) and thus t(i→j) = t(j→i).
-        three_body *= 0.5 * cheb[:, :, xp.newaxis]
+        # ── Group B: p ∈ pt (pair_j[p]==a), primary direction = −pair_v[p] ─
+        # sign: -1 for fwd secondaries (q∈pc), +1 for rev secondaries (q∈pt)
+        if n_pt > 0:
+            sign_B = _np.concatenate([
+                -_np.ones(n_pc, dtype=_np.float64),
+                _np.ones(n_pt,  dtype=_np.float64),
+            ])
+            j_pos = -pair_v_cpu[pt]  # (n_pt, 3)  a → i
+            d2 = _np.sum((k_pos[_np.newaxis, :, :] - j_pos[:, _np.newaxis, :]) ** 2, axis=2)
+            mask_B = d2 > _same_image_tol2
+            idx_p, idx_q = _np.nonzero(mask_B)
+            if idx_p.size > 0:
+                _add_triplet_contributions(
+                    three_body,
+                    pt[idx_p],        # CPU int64
+                    q_env[idx_q],     # CPU int64
+                    sign_B[idx_q],    # CPU float64
+                    pair_v, pair_r, cheb, W,
+                )
+
+    # Free CSR tables — no longer needed after the loop.
+    del order_center, order_target, cnt_c, cnt_t, off_c, off_t
+    del pair_r
+
+    # The factor of 0.5 averages i's and j's environments (ensures t(i→j) = t(j→i)).
+    three_body *= 0.5 * cheb[:, :, xp.newaxis]
 
     # ── Assemble ────────────────────────────────────────────────────────────
     descriptors = xp.concatenate(
         [two_body, three_body.reshape(n_pairs, M * W)], axis=1
     )
+    del three_body
     # pair_i / pair_j: CPU int arrays for Hamiltonian indexing
     # pair_v, descriptors: xp-arrays (GPU or CPU depending on _GPU)
     return descriptors, (pair_i, pair_j, pair_v)

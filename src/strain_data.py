@@ -13,7 +13,7 @@ import numpy as np
 _PKG_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STRAINED_XYZ = os.path.join(_PKG_ROOT, "data", "strained_bilayer_graphene_rVV10.xyz")
 
-LAT_CON = 2.46
+LAT_CON = 2.4694  # equilibrium in-plane lattice constant a (Å) for BLG
 STACKINGS = ["AB", "AA", "SP"]
 STRAIN_RANGE = 0.005
 LAYER_Z_FLAT_TOL = 1e-6

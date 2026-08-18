@@ -1,0 +1,127 @@
+# use_acsf_models_propagation.txt — index is 0-based line index (comments skipped)
+# 62 ACSF_hoppings_sk models with MCMC hopping calibration metrics
+# index  M  W  test_rmse_eV  nll_at_min_miscal  T_at_min_miscal
+# 0  M=6  W=0  test_rmse_eV=0.0303397  nll_at_min_miscal=-0.641522  T_at_min_miscal=0.5
+ACSF_hoppings_sk_M_6_W_0
+# 1  M=6  W=1  test_rmse_eV=0.0297006  nll_at_min_miscal=0.587348  T_at_min_miscal=0.5
+ACSF_hoppings_sk_M_6_W_1
+# 2  M=6  W=2  test_rmse_eV=0.011891  nll_at_min_miscal=-2.16011  T_at_min_miscal=0.5
+ACSF_hoppings_sk_M_6_W_2
+# 3  M=6  W=3  test_rmse_eV=0.0111694  nll_at_min_miscal=-0.6849  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_6_W_3
+# 4  M=6  W=4  test_rmse_eV=0.0104222  nll_at_min_miscal=-1.48252  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_6_W_4
+# 5  M=6  W=5  test_rmse_eV=0.0108328  nll_at_min_miscal=-1.72547  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_6_W_5
+# 6  M=6  W=6  test_rmse_eV=0.0102186  nll_at_min_miscal=-2.63484  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_6_W_6
+# 7  M=7  W=0  test_rmse_eV=0.0142339  nll_at_min_miscal=-1.93061  T_at_min_miscal=1.25
+ACSF_hoppings_sk_M_7_W_0
+# 8  M=7  W=1  test_rmse_eV=0.0133109  nll_at_min_miscal=-0.650303  T_at_min_miscal=1
+ACSF_hoppings_sk_M_7_W_1
+# 9  M=7  W=2  test_rmse_eV=0.00905826  nll_at_min_miscal=-2.95908  T_at_min_miscal=1
+ACSF_hoppings_sk_M_7_W_2
+# 10  M=7  W=3  test_rmse_eV=0.00801137  nll_at_min_miscal=-2.66564  T_at_min_miscal=0.8
+ACSF_hoppings_sk_M_7_W_3
+# 11  M=7  W=4  test_rmse_eV=0.0069132  nll_at_min_miscal=-2.71285  T_at_min_miscal=0.5
+ACSF_hoppings_sk_M_7_W_4
+# 12  M=7  W=5  test_rmse_eV=0.00687476  nll_at_min_miscal=-2.66289  T_at_min_miscal=0.5
+ACSF_hoppings_sk_M_7_W_5
+# 13  M=7  W=6  test_rmse_eV=0.00602919  nll_at_min_miscal=-2.92989  T_at_min_miscal=0.5
+ACSF_hoppings_sk_M_7_W_6
+# 14  M=8  W=0  test_rmse_eV=0.0101046  nll_at_min_miscal=-1.80064  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_8_W_0
+# 15  M=8  W=1  test_rmse_eV=0.0107926  nll_at_min_miscal=-1.00654  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_8_W_1
+# 16  M=8  W=2  test_rmse_eV=0.00737554  nll_at_min_miscal=-3.28985  T_at_min_miscal=0.75
+ACSF_hoppings_sk_M_8_W_2
+# 17  M=8  W=3  test_rmse_eV=0.00618692  nll_at_min_miscal=-2.62311  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_8_W_3
+# 18  M=8  W=4  test_rmse_eV=0.00573159  nll_at_min_miscal=-3.14364  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_8_W_4
+# 19  M=8  W=5  test_rmse_eV=0.00555156  nll_at_min_miscal=-3.19669  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_8_W_5
+# 20  M=8  W=6  test_rmse_eV=0.014271  nll_at_min_miscal=-3.09868  T_at_min_miscal=0.05
+ACSF_hoppings_sk_M_8_W_6
+# 21  M=9  W=0  test_rmse_eV=0.0120043  nll_at_min_miscal=-2.47171  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_9_W_0
+# 22  M=9  W=1  test_rmse_eV=0.00979981  nll_at_min_miscal=-2.93137  T_at_min_miscal=0.5
+ACSF_hoppings_sk_M_9_W_1
+# 23  M=9  W=2  test_rmse_eV=0.007275  nll_at_min_miscal=-3.36125  T_at_min_miscal=0.5
+ACSF_hoppings_sk_M_9_W_2
+# 24  M=9  W=3  test_rmse_eV=0.00640839  nll_at_min_miscal=-2.94814  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_9_W_3
+# 25  M=9  W=4  test_rmse_eV=0.00577986  nll_at_min_miscal=-3.58921  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_9_W_4
+# 26  M=9  W=5  test_rmse_eV=0.00604501  nll_at_min_miscal=-3.61661  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_9_W_5
+# 27  M=9  W=6  test_rmse_eV=0.00587034  nll_at_min_miscal=-3.67541  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_9_W_6
+# 28  M=10  W=0  test_rmse_eV=0.011592  nll_at_min_miscal=-2.59795  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_10_W_0
+# 29  M=10  W=1  test_rmse_eV=0.00981004  nll_at_min_miscal=-2.66731  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_10_W_1
+# 30  M=10  W=2  test_rmse_eV=0.00717453  nll_at_min_miscal=-3.30386  T_at_min_miscal=0.5
+ACSF_hoppings_sk_M_10_W_2
+# 31  M=10  W=3  test_rmse_eV=0.00680856  nll_at_min_miscal=-3.06233  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_10_W_3
+# 32  M=10  W=4  test_rmse_eV=0.00679865  nll_at_min_miscal=-3.64572  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_10_W_4
+# 33  M=10  W=5  test_rmse_eV=0.00601723  nll_at_min_miscal=-3.96423  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_10_W_5
+# 34  M=10  W=6  test_rmse_eV=0.0112313  nll_at_min_miscal=-3.4842  T_at_min_miscal=0.05
+ACSF_hoppings_sk_M_10_W_6
+# 35  M=11  W=0  test_rmse_eV=0.0112673  nll_at_min_miscal=-2.69284  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_11_W_0
+# 36  M=11  W=1  test_rmse_eV=0.00926807  nll_at_min_miscal=-2.46362  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_11_W_1
+# 37  M=11  W=2  test_rmse_eV=0.00677349  nll_at_min_miscal=-3.50501  T_at_min_miscal=0.5
+ACSF_hoppings_sk_M_11_W_2
+# 38  M=11  W=3  test_rmse_eV=0.0060034  nll_at_min_miscal=-3.30249  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_11_W_3
+# 39  M=11  W=4  test_rmse_eV=0.00599547  nll_at_min_miscal=-3.31656  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_11_W_4
+# 40  M=11  W=5  test_rmse_eV=0.00637573  nll_at_min_miscal=-3.58588  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_11_W_5
+# 41  M=11  W=6  test_rmse_eV=0.0059304  nll_at_min_miscal=-3.67346  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_11_W_6
+# 42  M=12  W=0  test_rmse_eV=0.0112095  nll_at_min_miscal=-3.03057  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_12_W_0
+# 43  M=12  W=1  test_rmse_eV=0.00943294  nll_at_min_miscal=-3.39549  T_at_min_miscal=0.5
+ACSF_hoppings_sk_M_12_W_1
+# 44  M=12  W=2  test_rmse_eV=0.00705141  nll_at_min_miscal=-3.04603  T_at_min_miscal=0.5
+ACSF_hoppings_sk_M_12_W_2
+# 45  M=12  W=3  test_rmse_eV=0.00617768  nll_at_min_miscal=-2.9631  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_12_W_3
+# 46  M=12  W=4  test_rmse_eV=0.00542532  nll_at_min_miscal=-3.3023  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_12_W_4
+# 47  M=12  W=5  test_rmse_eV=0.00543303  nll_at_min_miscal=-3.40456  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_12_W_5
+# 48  M=12  W=6  test_rmse_eV=0.0149568  nll_at_min_miscal=-3.17916  T_at_min_miscal=0.05
+ACSF_hoppings_sk_M_12_W_6
+# 49  M=14  W=0  test_rmse_eV=0.00957102  nll_at_min_miscal=-3.111  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_14_W_0
+# 50  M=14  W=1  test_rmse_eV=0.00842997  nll_at_min_miscal=-3.60043  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_14_W_1
+# 51  M=14  W=2  test_rmse_eV=0.00673741  nll_at_min_miscal=-2.78653  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_14_W_2
+# 52  M=14  W=3  test_rmse_eV=0.00499444  nll_at_min_miscal=-3.20413  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_14_W_3
+# 53  M=14  W=4  test_rmse_eV=0.0056446  nll_at_min_miscal=-3.37695  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_14_W_4
+# 54  M=14  W=5  test_rmse_eV=0.00523611  nll_at_min_miscal=-3.41866  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_14_W_5
+# 55  M=14  W=6  test_rmse_eV=0.00482874  nll_at_min_miscal=-3.40797  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_14_W_6
+# 56  M=15  W=0  test_rmse_eV=0.00986927  nll_at_min_miscal=-3.08909  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_15_W_0
+# 57  M=15  W=1  test_rmse_eV=0.00778893  nll_at_min_miscal=-3.64094  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_15_W_1
+# 58  M=15  W=2  test_rmse_eV=0.00601125  nll_at_min_miscal=-3.13519  T_at_min_miscal=0.75
+ACSF_hoppings_sk_M_15_W_2
+# 59  M=15  W=3  test_rmse_eV=0.00563841  nll_at_min_miscal=-3.20369  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_15_W_3
+# 60  M=15  W=5  test_rmse_eV=0.00495578  nll_at_min_miscal=-3.15209  T_at_min_miscal=0.75
+ACSF_hoppings_sk_M_15_W_5
+# 61  M=15  W=6  test_rmse_eV=0.00508231  nll_at_min_miscal=-3.36877  T_at_min_miscal=0.25
+ACSF_hoppings_sk_M_15_W_6

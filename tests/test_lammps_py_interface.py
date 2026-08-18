@@ -468,6 +468,55 @@ class TestPODLammpsCalculator:
             assert np.isclose(e_b, e_s, rtol=1e-8), \
                 f"POD batch[{i}]: {e_b} vs single {e_s}"
 
+    def test_energy_from_descriptors_matches_lammps(self, si_setup):
+        from ase.build import bulk
+        atoms1 = bulk("Si", crystalstructure="diamond", a=5.431, cubic=True)
+        atoms2 = bulk("Si", crystalstructure="diamond", a=5.5, cubic=True)
+        atoms_list = [atoms1, atoms2]
+        _, hp, _, nc = si_setup
+        rng = np.random.default_rng(3)
+        coeffs = rng.normal(0, 0.05, nc)
+
+        calc = PODLammpsCalculator(hp, coeffs, elements=["Si"], cutoff=5.0)
+        calc.prepare_batch(atoms_list)
+        descriptors = calc.compute_pod_descriptors(atoms_list, verbose=False)
+        e_desc = calc.energy_from_descriptors(coeffs, descriptors)
+
+        calc.set_parameters(coeffs)
+        e_lammps, _ = calc.evaluate_batch(atoms_list)
+        assert np.allclose(e_desc, e_lammps, rtol=1e-8), \
+            f"descriptor energy {e_desc} vs LAMMPS {e_lammps}"
+
+    def test_pod_atom_descriptors_sum_to_global(self, si_setup):
+        """``compute pod/atom`` matches globally summed descriptors in one shot."""
+        from ase.build import bulk
+
+        atoms = bulk("Si", crystalstructure="diamond", a=5.431, cubic=True)
+        _, hp, _, nc = si_setup
+        calc = PODLammpsCalculator(
+            hp, np.zeros(nc), elements=["Si"], cutoff=5.0,
+        )
+        D_atom = calc.compute_pod_atom_descriptors(atoms)
+        assert D_atom.ndim == 2
+        assert D_atom.shape[0] == len(atoms)
+        assert np.all(np.isfinite(D_atom))
+        D_sum = D_atom.sum(axis=0)
+        D_glob = calc.compute_pod_descriptors([atoms], verbose=False)[0]
+        if D_sum.shape[0] == D_glob.shape[0]:
+            assert np.allclose(D_sum, D_glob, rtol=1e-8, atol=1e-8)
+        elif D_sum.shape[0] + 1 == D_glob.shape[0]:
+            # Coeff file leading constant/shift term is absent from compute pod/atom.
+            match = np.allclose(D_sum, D_glob[1:], rtol=1e-8, atol=1e-8)
+            assert match, (
+                f"atom-sum {D_sum.shape} does not match global {D_glob.shape}"
+            )
+        else:
+            raise AssertionError(
+                f"atom-sum ncols={D_sum.size} vs global ncols={D_glob.size}"
+            )
+        D_atom2 = calc.compute_pod_atom_descriptors(atoms)
+        assert np.allclose(D_atom, D_atom2, rtol=1e-10, atol=1e-10)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  potentials.py aliasing test

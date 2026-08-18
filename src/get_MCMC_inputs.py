@@ -17,6 +17,7 @@ from blg_model_builder.lammps_interface import (
     TersoffKCLammpsCalculator,
     TersoffDRIPLammpsCalculator,
     PODLammpsCalculator,
+    PODD3LammpsCalculator,
     TETB_PODLammpsCalculator,
 )
 from blg_model_builder.allegro_interface import (
@@ -156,6 +157,12 @@ def _append_shift_param(params_arr, bounds_arr, ydata):
     return np.append(params_arr, shift0), np.vstack([bounds_arr, shift_bounds])
 
 
+def _indices_in_full_batch(x_subset, x_full) -> list[int]:
+    """Row indices of ``x_subset`` structures inside ``x_full`` (same ``Atoms`` objects)."""
+    idx = {id(a): i for i, a in enumerate(x_full)}
+    return [idx[id(a)] for a in x_subset]
+
+
 def _make_batch_evaluator(calc_obj, xdata_atoms, set_params_fn=None):
     """Return an ``evaluator(atoms, params) -> (energy, forces)`` backed by batch LAMMPS evaluation.
 
@@ -198,6 +205,304 @@ def _make_batch_evaluator(calc_obj, xdata_atoms, set_params_fn=None):
         return float(e), np.asarray(f, dtype=float)
 
     return evaluator
+
+
+def _make_pod_descriptor_evaluator(calc_obj, xdata_atoms, *, verbose: bool = False):
+    """Return an MCMC energy evaluator backed by precomputed POD descriptors.
+
+    Descriptors are extracted once via :meth:`PODLammpsCalculator.compute_pod_descriptors`
+    (``n_desc`` LAMMPS passes).  Each subsequent parameter proposal evaluates
+  ``E = params · descriptors`` in NumPy with no further LAMMPS calls.
+
+    Forces are not returned (EMCEE sets ``w0['forces'] = 0`` for POD_energy).
+    """
+    descriptors = calc_obj.compute_pod_descriptors(xdata_atoms, verbose=verbose)
+    _idx = {id(a): i for i, a in enumerate(xdata_atoms)}
+    state = {"params": None, "energies": None}
+
+    def evaluator(atoms, params):
+        params_arr = np.asarray(params, dtype=np.float64)
+        if state["params"] is None or not np.array_equal(params_arr, state["params"]):
+            state["energies"] = calc_obj.energy_from_descriptors(
+                params_arr, descriptors
+            )
+            state["params"] = params_arr.copy()
+        i = _idx[id(atoms)]
+        e = float(state["energies"][i])
+        if not np.isfinite(e):
+            return e, np.full((len(atoms), 3), np.nan)
+        return e
+
+    return evaluator
+
+
+def _resolve_pod_descriptor_hyperparams(data_kw: Dict[str, Any]) -> Tuple[Dict[str, Any], float]:
+    """POD descriptor dict + cutoff (shared by ``POD_energy`` / ``PODD3_energy``)."""
+    rcut = float(data_kw.get("pod_cutoff", data_kw.get("rcut", 6.0)))
+    pod_hp_override = data_kw.get("pod_hyperparams")
+    if isinstance(pod_hp_override, dict) and pod_hp_override:
+        hyperparams = dict(pod_hp_override)
+        hyperparams.setdefault("species", ["C"])
+        return hyperparams, rcut
+    _M = int(data_kw.get("M", 10))
+    _W = int(data_kw.get("W", 4))
+    hyperparams = {
+        "species": ["C"],
+        "bessel_polynomial_degree": POD_DEFAULT_BESSEL_POLYNOMIAL_DEGREE,
+        "inverse_polynomial_degree": POD_DEFAULT_INVERSE_POLYNOMIAL_DEGREE,
+        "twobody_number_radial_basis_functions": int(data_kw.get("two_body_radial", _M)),
+        "threebody_number_radial_basis_functions": int(data_kw.get("three_body_radial", _M)),
+        "threebody_angular_degree": int(data_kw.get("three_body_angular", _W)),
+        "fourbody_number_radial_basis_functions": int(data_kw.get("four_body_radial", _M)),
+        "fourbody_angular_degree": int(data_kw.get("four_body_angular", _W)),
+        "fivebody_number_radial_basis_functions": int(data_kw.get("five_body_radial", 4)),
+        "fivebody_angular_degree": int(data_kw.get("five_body_angular", 3)),
+        "sixbody_number_radial_basis_functions": int(data_kw.get("six_body_radial", 3)),
+        "sixbody_angular_degree": int(data_kw.get("six_body_angular", 2)),
+        "sevenbody_number_radial_basis_functions": int(data_kw.get("seven_body_radial", 2)),
+        "sevenbody_angular_degree": int(data_kw.get("seven_body_angular", 2)),
+    }
+    return hyperparams, rcut
+
+
+def _load_pod_coeff_vector(
+    model_prefix: str,
+    hyperparams: Dict[str, Any],
+    data_kw: Dict[str, Any],
+) -> np.ndarray:
+    """Load POD linear coefficients from best-fit / search cache (else zeros).
+
+    Does not fit and does not evaluate structures — for UQ runtime construction.
+    """
+    ncoeffs = ncoeff_from_params(hyperparams)
+    _regularization = float(data_kw.get("regularization", 1e-12))
+    _include_intra = bool(data_kw.get("include_intralayer", False))
+    _pod_hash = str(data_kw.get("pod_hash", "")).strip()
+    _reg_tag = f"reg{_regularization:.0e}"
+    _intra_tag = "_intra" if _include_intra else ""
+    _hash_tag = f"_{_pod_hash}" if _pod_hash else ""
+    cache_path = (
+        f"{_BEST_FIT_PARAMS_SUBDIR}/"
+        f"{model_prefix}_{ncoeffs}_{_reg_tag}{_intra_tag}{_hash_tag}_best_fit_params.npz"
+    )
+    if os.path.exists(cache_path):
+        return np.asarray(np.load(cache_path)["params"], dtype=float).ravel()
+    from blg_model_builder.pod_model_selection import load_pod_hyperparam_search_fit
+
+    search_params = load_pod_hyperparam_search_fit(_pod_hash)
+    if search_params is not None:
+        return np.asarray(search_params, dtype=float).ravel()
+    return np.zeros(ncoeffs, dtype=np.float64)
+
+
+def _load_energy_params_npz(cache_name: str) -> Optional[np.ndarray]:
+    path = f"{_BEST_FIT_PARAMS_SUBDIR}/{cache_name}"
+    if not os.path.exists(path):
+        return None
+    return np.asarray(np.load(path, allow_pickle=True)["params"], dtype=float).ravel()
+
+
+def build_and_register_uq_runtime_calculator(
+    model_name: str,
+    data_kw: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Build and register a UQ energy calculator without loading training data.
+
+    Used by :func:`get_MCMC_inputs` when ``calculator_only=True`` (UQ
+    propagation / relaxation). Registers via :func:`_register_uq_lammps_runtime`.
+    Ensemble MCMC draws overwrite parameters afterward.
+    """
+    data_kw = dict(data_kw or {})
+    _UQ_LAMMPS_RUNTIME.clear()
+
+    if model_name.startswith("PODD3_energy"):
+        hyperparams, rcut = _resolve_pod_descriptor_hyperparams(data_kw)
+        coeffs = _load_pod_coeff_vector("PODD3_energy", hyperparams, data_kw)
+        calc_obj = PODD3LammpsCalculator(
+            hyperparams,
+            coeffs,
+            elements=["C"],
+            cutoff=rcut,
+            d3_damping=str(data_kw.get("d3_damping", "zerom")),
+            d3_functional=str(data_kw.get("d3_functional", "pbe")),
+            d3_cutoff=float(data_kw.get("d3_cutoff", 30.0)),
+            d3_cn_cutoff=float(data_kw.get("d3_cn_cutoff", 20.0)),
+        )
+        _register_uq_lammps_runtime(calc_obj)
+        return
+
+    if model_name.startswith("POD_energy"):
+        hyperparams, rcut = _resolve_pod_descriptor_hyperparams(data_kw)
+        coeffs = _load_pod_coeff_vector("POD_energy", hyperparams, data_kw)
+        calc_obj = PODLammpsCalculator(
+            hyperparams, coeffs, elements=["C"], cutoff=rcut,
+        )
+        _register_uq_lammps_runtime(calc_obj)
+        return
+
+    if model_name == "Tersoff+DRIP":
+        _nd = TersoffDRIPLammpsCalculator.N_FITTED_PARAMS
+        _nt = TersoffDRIPLammpsCalculator.N_TERSOFF_PARAMS
+        _n_phys = _nd + _nt
+        p = _load_energy_params_npz("Tersoff+DRIP_best_fit_params.npz")
+        if p is None:
+            drip_data = np.load(
+                f"{_BEST_FIT_PARAMS_SUBDIR}/DRIP_best_fit_params_estimate.npz"
+            )
+            tersoff_data = np.load(
+                f"{_BEST_FIT_PARAMS_SUBDIR}/Tersoff_best_fit_params_estimate.npz"
+            )
+            p = np.concatenate(
+                [drip_data["params"][:_nd], tersoff_data["params"][:_nt], [0.0]]
+            )
+        elif p.size == _n_phys:
+            p = np.append(p, 0.0)
+        calc_obj = TersoffDRIPLammpsCalculator(
+            tersoff_params=p[_nd:_n_phys].tolist(),
+            drip_params=p[:_nd].tolist(),
+            elements=["C"],
+            shift=float(p[-1]),
+        )
+
+        def _set_tersoff_drip(params_flat):
+            pf = np.asarray(params_flat, dtype=np.float64)
+            calc_obj.set_parameters(
+                tersoff_params=pf[_nd:_n_phys].tolist(),
+                drip_params=pf[:_nd].tolist(),
+                shift=float(pf[-1]),
+            )
+
+        _register_uq_lammps_runtime(calc_obj, _set_tersoff_drip)
+        return
+
+    if model_name == "Tersoff+Kolmogorov_Crespi":
+        _nkc = TersoffKCLammpsCalculator.N_KC_PARAMS
+        _nt = TersoffKCLammpsCalculator.N_TERSOFF_PARAMS
+        _n_phys = _nkc + _nt
+        p = _load_energy_params_npz(
+            "Tersoff+Kolmogorov_Crespi_best_fit_params.npz"
+        )
+        if p is None:
+            kc_data = np.load(
+                f"{_BEST_FIT_PARAMS_SUBDIR}/Kolmogorov_Crespi_best_fit_params_estimate.npz"
+            )
+            tersoff_data = np.load(
+                f"{_BEST_FIT_PARAMS_SUBDIR}/Tersoff_best_fit_params_estimate.npz"
+            )
+            p = np.concatenate(
+                [kc_data["params"][:_nkc], tersoff_data["params"][:_nt], [0.0]]
+            )
+        elif p.size == _n_phys:
+            p = np.append(p, 0.0)
+        calc_obj = TersoffKCLammpsCalculator(
+            tersoff_params=p[_nkc:_n_phys].tolist(),
+            kc_params=p[:_nkc].tolist(),
+            elements=["C"],
+            shift=float(p[-1]),
+        )
+
+        def _set_tersoff_kc(params_flat):
+            pf = np.asarray(params_flat, dtype=np.float64)
+            calc_obj.set_parameters(
+                tersoff_params=pf[_nkc:_n_phys].tolist(),
+                kc_params=pf[:_nkc].tolist(),
+                shift=float(pf[-1]),
+            )
+
+        _register_uq_lammps_runtime(calc_obj, _set_tersoff_kc)
+        return
+
+    if model_name.startswith("TETB_POD"):
+        tb_hyperparams, pod_hyperparams, tetb_tag = (
+            build_tetb_pod_hyperparams_from_data_kw(data_kw)
+        )
+        _tb_M = int(tb_hyperparams.get("M", tb_hyperparams.get("acsf_M", 10)))
+        _tb_W = int(tb_hyperparams.get("W", tb_hyperparams.get("acsf_W", 3)))
+        pod_cutoff = float(data_kw.get("pod_cutoff", 6.0))
+        n_pod = ncoeff_from_params(pod_hyperparams)
+        tb_best_npz = (
+            f"{_BEST_FIT_PARAMS_SUBDIR}/ACSF_hoppings_M_{_tb_M}_W_{_tb_W}_best_fit_params.npz"
+        )
+        if not os.path.exists(tb_best_npz):
+            raise FileNotFoundError(
+                f"calculator_only TETB_POD requires ACSF cache {tb_best_npz!r}"
+            )
+        tb_params_arr = np.asarray(
+            np.load(tb_best_npz, allow_pickle=True)["params"], dtype=np.float64
+        ).ravel()
+        n_tb_acsf = int(tb_params_arr.size)
+
+        tetb_cache = f"{_BEST_FIT_PARAMS_SUBDIR}/TETB_POD_{tetb_tag}_best_fit_params.npz"
+        legacy_tetb = f"{_BEST_FIT_PARAMS_SUBDIR}/TETB_POD_best_fit_params.npz"
+        if os.path.isfile(tetb_cache):
+            tetb_path = tetb_cache
+        elif os.path.isfile(legacy_tetb):
+            tetb_path = legacy_tetb
+        else:
+            raise FileNotFoundError(
+                f"calculator_only TETB_POD requires POD cache {tetb_cache!r} "
+                f"(or legacy {legacy_tetb!r})"
+            )
+        pe = np.asarray(np.load(tetb_path, allow_pickle=True)["params"], dtype=np.float64).ravel()
+        if pe.shape[0] == n_pod + 1:
+            pe = pe[:n_pod]
+        calc_obj = TETB_PODLammpsCalculator(
+            tb_params=tb_params_arr,
+            pod_params=pe[:n_pod],
+            tb_hyperparams=tb_hyperparams,
+            pod_hyperparams=pod_hyperparams,
+            pod_cutoff=pod_cutoff,
+            elements=["C"],
+            kpoints=data_kw.get("kpoints", None),
+            tb_solver_method=str(data_kw.get("tb_solver_method", "diagonalization")),
+            ewald_cutoff=float(data_kw.get("ewald_cutoff", 12.0)),
+            pppm_accuracy=float(data_kw.get("pppm_accuracy", 1e-4)),
+            valence_charge=float(data_kw.get("valence_charge", 1.0)),
+            shift=0.0,
+        )
+
+        def _set_tetb_joint(params_flat):
+            p = np.asarray(params_flat, dtype=np.float64).ravel()
+            npl = int(n_pod)
+            if p.size in (n_tb_acsf + npl + 1, n_tb_acsf + npl):
+                calc_obj.set_tb_parameters(p[:n_tb_acsf])
+                calc_obj.set_parameters(p[n_tb_acsf:])
+            elif p.size in (npl + 1, npl):
+                calc_obj.set_parameters(p)
+            else:
+                raise ValueError(
+                    f"TETB_POD: unexpected parameter length {p.size} "
+                    f"(tb={n_tb_acsf}, pod={npl})."
+                )
+
+        _register_uq_lammps_runtime(calc_obj, _set_tetb_joint)
+        return
+
+    if model_name.startswith("Allegro_energy"):
+        import blg_model_builder.energy_registry  # noqa: F401
+        from blg_model_builder.model_registry import make_hyperparams
+
+        hp = make_hyperparams(model_name, **data_kw)
+        calc_obj = AllegroCalculator(
+            hp["allegro_checkpoint"],
+            r_max=hp["allegro_r_max"],
+            device=hp["allegro_device"],
+        )
+        from blg_model_builder.model_registry import cache_basename
+
+        cache_path = f"{_BEST_FIT_PARAMS_SUBDIR}/{cache_basename(model_name, hp)}.npz"
+        if os.path.exists(cache_path):
+            calc_obj.set_parameters(np.asarray(np.load(cache_path)["params"], dtype=float))
+        else:
+            calc_obj.set_parameters(calc_obj.get_parameters())
+        _register_uq_lammps_runtime(calc_obj)
+        return
+
+    raise ValueError(
+        f"calculator_only=True is not supported for model_name={model_name!r}. "
+        "Use a UQ energy model (POD_energy*, PODD3_energy*, TETB_POD*, "
+        "Tersoff+DRIP, Tersoff+Kolmogorov_Crespi, Allegro_energy*)."
+    )
 
 
 def build_tetb_pod_hyperparams_from_data_kw(
@@ -302,6 +607,11 @@ def get_MCMC_inputs(model_name, calc_type="python", supercells=1,
     is added to TB + Ewald so the sum matches those totals; no extra additive
     ``mean(E_DFT)`` shift is applied (unlike classical potentials that use
     ``_append_shift_param``).
+
+    Pass ``calculator_only=True`` (as a keyword) to register a UQ energy
+    calculator without loading training structures or evaluating descriptors /
+    batch energies — for relaxation / elasticity propagation that only needs
+    ``get_uq_lammps_runtime()``.
     """
     _UQ_LAMMPS_RUNTIME.clear()
     data_kw: Dict[str, Any] = {}
@@ -322,6 +632,11 @@ def get_MCMC_inputs(model_name, calc_type="python", supercells=1,
         data_kw["pod_W"] = pod_W
 
     skip_diagnostics = bool(data_kw.pop("skip_diagnostics", False))
+    calculator_only = bool(data_kw.pop("calculator_only", False))
+    if calculator_only:
+        build_and_register_uq_runtime_calculator(model_name, data_kw)
+        empty: Dict[str, Any] = {}
+        return empty, empty, empty, empty, empty, empty, empty, empty, empty, empty
 
     # If the model name encodes M and W (e.g. ACSF_hoppings_sk_M_8_W_6),
     # those values take priority over whatever arrived in data_kw / kwargs
@@ -644,6 +959,202 @@ def get_MCMC_inputs(model_name, calc_type="python", supercells=1,
             )
             
     # ----- Energy data -----
+    elif model_name.startswith("PODD3_energy"):
+        # POD + DFT-D3 dispersion correction.
+        #
+        # The reference energies / forces are pre-corrected by subtracting the
+        # fixed D3 contribution *before* fitting so that the POD coefficients
+        # only capture the residual (DFT - D3).  During MCMC and propagation the
+        # full PODD3LammpsCalculator is used, which adds D3 back automatically.
+        #
+        # Hyperparameter handling is identical to POD_energy.
+        rcut = float(data_kw.get("pod_cutoff", data_kw.get("rcut", 6.0)))
+        pod_hp_override = data_kw.get("pod_hyperparams")
+        if isinstance(pod_hp_override, dict) and pod_hp_override:
+            hyperparams = dict(pod_hp_override)
+            hyperparams.setdefault("species", ["C"])
+        else:
+            _M = int(data_kw.get("M", 10))
+            _W = int(data_kw.get("W", 4))
+            hyperparams = {
+                "species": ["C"],
+                "bessel_polynomial_degree": POD_DEFAULT_BESSEL_POLYNOMIAL_DEGREE,
+                "inverse_polynomial_degree": POD_DEFAULT_INVERSE_POLYNOMIAL_DEGREE,
+                "twobody_number_radial_basis_functions":   int(data_kw.get("two_body_radial",   _M)),
+                "threebody_number_radial_basis_functions": int(data_kw.get("three_body_radial", _M)),
+                "threebody_angular_degree":                int(data_kw.get("three_body_angular", _W)),
+                "fourbody_number_radial_basis_functions":  int(data_kw.get("four_body_radial",  _M)),
+                "fourbody_angular_degree":                 int(data_kw.get("four_body_angular",  _W)),
+                "fivebody_number_radial_basis_functions":  int(data_kw.get("five_body_radial",   4)),
+                "fivebody_angular_degree":                 int(data_kw.get("five_body_angular",   3)),
+                "sixbody_number_radial_basis_functions":   int(data_kw.get("six_body_radial",     3)),
+                "sixbody_angular_degree":                  int(data_kw.get("six_body_angular",     2)),
+                "sevenbody_number_radial_basis_functions": int(data_kw.get("seven_body_radial",  2)),
+                "sevenbody_angular_degree":                int(data_kw.get("seven_body_angular",  2)),
+            }
+
+        ncoeffs = ncoeff_from_params(hyperparams)
+
+        _regularization = float(data_kw.get("regularization",   1e-12))
+        _weight_energy  = float(data_kw.get("weight_energy",    1000.0))
+        _weight_force   = float(data_kw.get("weight_force",     1.0))
+        _include_intra  = bool(data_kw.get("include_intralayer", False))
+        _pod_hash       = str(data_kw.get("pod_hash", "")).strip()
+
+        _d3_damping    = str(data_kw.get("d3_damping",    "zerom"))
+        _d3_functional = str(data_kw.get("d3_functional", "pbe"))
+        _d3_cutoff     = float(data_kw.get("d3_cutoff",     30.0))
+        _d3_cn_cutoff  = float(data_kw.get("d3_cn_cutoff",  20.0))
+
+        _reg_tag   = f"reg{_regularization:.0e}"
+        _intra_tag = "_intra" if _include_intra else ""
+        _hash_tag  = f"_{_pod_hash}" if _pod_hash else ""
+        cache_path = (
+            f"{_BEST_FIT_PARAMS_SUBDIR}/"
+            f"PODD3_energy_{ncoeffs}_{_reg_tag}{_intra_tag}{_hash_tag}_best_fit_params.npz"
+        )
+
+        # Build the calculator with zero coefficients first so we can run the
+        # D3-correction pass before fitting.
+        _zero_params = np.zeros(ncoeffs, dtype=np.float64)
+        calc_obj = PODD3LammpsCalculator(
+            hyperparams, _zero_params, elements=["C"], cutoff=rcut,
+            d3_damping=_d3_damping, d3_functional=_d3_functional,
+            d3_cutoff=_d3_cutoff, d3_cn_cutoff=_d3_cn_cutoff,
+        )
+
+        # ── Subtract D3 correction from reference energies and forces ────────
+        _d3_e_cache = cache_path.replace("_best_fit_params.npz", "_d3_correction.npz")
+        if os.path.exists(_d3_e_cache):
+            _d3_npz = np.load(_d3_e_cache, allow_pickle=True)
+            _d3_energies_all = np.asarray(_d3_npz["d3_energies"])
+            _d3_forces_all   = list(_d3_npz["d3_forces"])
+            if not np.any(np.isfinite(_d3_energies_all)):
+                print(
+                    f"[PODD3_energy] Ignoring invalid cached D3 corrections in "
+                    f"{_d3_e_cache} (all NaN); recomputing.",
+                    flush=True,
+                )
+                os.remove(_d3_e_cache)
+                _d3_energies_all = None
+            else:
+                print(
+                    f"[PODD3_energy] Loaded cached D3 corrections from {_d3_e_cache}",
+                    flush=True,
+                )
+        else:
+            _d3_energies_all = None
+
+        if _d3_energies_all is None:
+            print(
+                "[PODD3_energy] Computing D3 correction for all structures …",
+                flush=True,
+            )
+            _d3_energies_all, _d3_forces_all = calc_obj.compute_d3_correction(
+                list(xdata["energy"])
+            )
+            np.savez(
+                _d3_e_cache,
+                d3_energies=_d3_energies_all,
+                d3_forces=np.asarray(_d3_forces_all, dtype=object),
+            )
+            print(
+                f"[PODD3_energy] D3 correction cached to {_d3_e_cache}",
+                flush=True,
+            )
+
+        def _d3_corr_for(atoms_subset, all_atoms):
+            """Return D3 energies/forces aligned to *atoms_subset*."""
+            idx = _indices_in_full_batch(atoms_subset, all_atoms)
+            e = _d3_energies_all[idx]
+            f = [_d3_forces_all[i] for i in idx]
+            return e, f
+
+        _d3_e_train, _d3_f_train = _d3_corr_for(
+            xdata_train["energy"], xdata["energy"]
+        )
+        _d3_e_test, _d3_f_test = _d3_corr_for(
+            xdata_test["energy"], xdata["energy"]
+        )
+
+        ydata_train_corr = dict(ydata_train)
+        ydata_train_corr["energy"] = (
+            np.asarray(ydata_train["energy"]) - _d3_e_train
+        )
+        ydata_train_corr["forces"] = [
+            np.asarray(f_dft) - np.asarray(f_d3)
+            for f_dft, f_d3 in zip(ydata_train["forces"], _d3_f_train)
+        ]
+
+        ydata_test_corr = dict(ydata_test)
+        ydata_test_corr["energy"] = (
+            np.asarray(ydata_test["energy"]) - _d3_e_test
+        )
+        ydata_test_corr["forces"] = [
+            np.asarray(f_dft) - np.asarray(f_d3)
+            for f_dft, f_d3 in zip(ydata_test["forces"], _d3_f_test)
+        ]
+
+        # Also correct ydata (full set) for downstream consumers.
+        ydata["energy"] = np.asarray(ydata["energy"]) - _d3_energies_all
+        ydata["forces"] = [
+            np.asarray(f_dft) - np.asarray(f_d3)
+            for f_dft, f_d3 in zip(ydata["forces"], _d3_forces_all)
+        ]
+        ydata_train = ydata_train_corr
+        ydata_test  = ydata_test_corr
+
+        if os.path.exists(cache_path):
+            _data = np.load(cache_path)
+            params["energy"] = _data["params"]
+            bounds["energy"] = np.array([len(params["energy"]) * [-1e4, 1e4]])
+            ypred_bestfit["energy"] = _energy_ypred_for_cache(_data["ypred_bestfit"])
+        else:
+            # fit_pod reads energies/forces from the atoms' SinglePointCalculator.
+            # Attach D3-corrected values to temporary copies of the training atoms.
+            from ase.calculators.singlepoint import SinglePointCalculator as _SPC  # noqa: PLC0415
+            _train_atoms_corr = []
+            for _a, _e_corr, _f_corr in zip(
+                xdata_train["energy"],
+                ydata_train_corr["energy"],
+                ydata_train_corr["forces"],
+            ):
+                _ac = _a.copy()
+                _ac.calc = _SPC(_ac, energy=float(_e_corr), forces=np.asarray(_f_corr))
+                _train_atoms_corr.append(_ac)
+
+            hyperparams_str = pod_hyperparams_to_str(hyperparams, rcut, ["C"])
+            params["energy"] = fit_pod(
+                hyperparams_str,
+                _train_atoms_corr,
+                regularization=_regularization,
+                weight_energy=_weight_energy,
+                weight_force=_weight_force,
+            )
+            bounds["energy"] = np.array([len(params["energy"]) * [-1e4, 1e4]])
+
+        _register_uq_lammps_runtime(calc_obj)
+        calc_obj.set_parameters(params["energy"])
+        calc["energy"] = _make_pod_descriptor_evaluator(calc_obj, xdata["energy"])
+
+        _train_idx = _indices_in_full_batch(
+            xdata_train["energy"], xdata["energy"]
+        )
+        ypred_bestfit["energy"] = calc_obj.energy_from_descriptors(
+            params["energy"], calc_obj._batch_descriptors[_train_idx]
+        )
+        calc_obj.set_parameters(params["energy"].tolist())
+        _, f_bf = calc_obj.evaluate_batch(list(xdata_train["energy"]))
+        ypred_bestfit["forces"] = f_bf
+
+        if not os.path.exists(cache_path):
+            np.savez(
+                cache_path,
+                params=params["energy"], bounds=bounds["energy"],
+                ypred_bestfit=ypred_bestfit["energy"],
+                **{k: v for k, v in hyperparams.items() if k != "species"},
+            )
+
     elif model_name.startswith("POD_energy"):
 
         # POD descriptor hyperparameters can be provided as a full dict (e.g. from the
@@ -699,27 +1210,51 @@ def get_MCMC_inputs(model_name, calc_type="python", supercells=1,
             bounds["energy"] = np.array([len(params["energy"]) * [-1e4, 1e4]])
             ypred_bestfit["energy"] = _energy_ypred_for_cache(data["ypred_bestfit"])
         else:
-            hyperparams_str = pod_hyperparams_to_str(hyperparams, rcut, ["C"])
-            params["energy"] = fit_pod(
-                hyperparams_str,
-                xdata_train["energy"],
-                regularization=_regularization,
-                weight_energy=_weight_energy,
-                weight_force=_weight_force,
-            )
-            bounds["energy"] = np.array([len(params["energy"]) * [-1e4, 1e4]])
+            from blg_model_builder.pod_model_selection import load_pod_hyperparam_search_fit
 
-        # Build batch-backed calculator over the full dataset.
+            _search_params = load_pod_hyperparam_search_fit(_pod_hash)
+            if _search_params is not None:
+                params["energy"] = np.asarray(_search_params, dtype=float).ravel()
+                bounds["energy"] = np.array([len(params["energy"]) * [-1e4, 1e4]])
+                print(
+                    f"[POD_energy] loaded coefficients from hyperparam search cache "
+                    f"({_pod_hash})",
+                    flush=True,
+                )
+            elif _pod_hash:
+                raise FileNotFoundError(
+                    "POD_energy was selected from "
+                    "pod_hyperparam_search.csv, but its "
+                    f"associated fit cache is missing for hash {_pod_hash!r}."
+                )
+            else:
+                hyperparams_str = pod_hyperparams_to_str(hyperparams, rcut, ["C"])
+                params["energy"] = fit_pod(
+                    hyperparams_str,
+                    xdata_train["energy"],
+                    regularization=_regularization,
+                    weight_energy=_weight_energy,
+                    weight_force=_weight_force,
+                )
+                bounds["energy"] = np.array([len(params["energy"]) * [-1e4, 1e4]])
+
+        # Build calculator over the full dataset.  MCMC uses descriptor
+        # precomputation (linear E = c·D); forces use one LAMMPS batch pass.
         calc_obj = PODLammpsCalculator(
             hyperparams, params["energy"], elements=["C"], cutoff=rcut,
         )
         _register_uq_lammps_runtime(calc_obj)
-        calc["energy"] = _make_batch_evaluator(calc_obj, xdata["energy"])
+        calc["energy"] = _make_pod_descriptor_evaluator(calc_obj, xdata["energy"])
 
-        # Compute (or recompute) best-fit predictions on the training set.
+        # Best-fit energies on the training split (descriptors cover the full set).
+        _train_idx = _indices_in_full_batch(
+            xdata_train["energy"], xdata["energy"]
+        )
+        ypred_bestfit["energy"] = calc_obj.energy_from_descriptors(
+            params["energy"], calc_obj._batch_descriptors[_train_idx]
+        )
         calc_obj.set_parameters(params["energy"].tolist())
-        e_bf, f_bf = calc_obj.evaluate_batch(list(xdata_train["energy"]))
-        ypred_bestfit["energy"] = e_bf
+        _, f_bf = calc_obj.evaluate_batch(list(xdata_train["energy"]))
         ypred_bestfit["forces"] = f_bf
 
         if not os.path.exists(cache_path):

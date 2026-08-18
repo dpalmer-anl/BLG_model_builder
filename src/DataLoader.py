@@ -619,7 +619,7 @@ def load_data_for_model(model_name, supercells=1, nn_val=None, level_of_theory="
         xdata_train, xdata_test, ydata_train, ydata_test = train_test_split(xdata, ydata)
 
     # ----- Energy data -----
-    elif model_name.startswith("POD_energy"):
+    elif model_name.startswith("PODD3_energy") or model_name.startswith("POD_energy"):
         # Combined interlayer + intralayer for single POD_NN model.
         # Forces: list of (n_atoms_i, 3) per config (n_atoms can differ between configs).
         inter_atoms, inter_E, inter_F = load_energy_data(

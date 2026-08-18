@@ -14,19 +14,16 @@ Toggle :data:`SEARCH_MODEL` at the top of this file.  For each candidate:
 
   1. Fit POD via LAMMPS ``fitpod`` on a fixed training split.
   2. Evaluate energy MAE / RMSE on a held-out test split (per atom).
-  3. Attempt TBLG relaxation for each angle in ``TBLG_THETAS`` (in order).  If the
-     **first** angle fails convergence / separation targets, later angles are not
-     relaxed and are recorded as skipped failures (saves time on large cells).
+  3. Relax TBLG at every angle in ``TBLG_THETAS`` with ASE FIRE.
   4. Record AB-style (min gap) and AA-style (max span) interlayer separations.
 
 Configurations where ``ncoeff > n_train_configs`` are skipped (under-determined).
 
-Results are written after **every** trial to JSON/CSV paths that include
-``SEARCH_MODEL`` (see ``_results_json_path`` / ``_results_csv_path``), and fit
-coefficients under ``<CACHE_DIR>/<SEARCH_MODEL>/``, so ``POD_energy`` and
-``TETB_POD`` searches never share files.  Legacy ``pod_hyperparam_search_results.json``
-and flat ``<CACHE_DIR>/<hash>.npz`` are read-only fallbacks when resuming an old
-``POD_energy`` run.
+Results are written after **every** trial to
+``pod_hyperparam_search.json`` and ``pod_hyperparam_search.csv`` (see
+``_results_json_path`` / ``_results_csv_path``).  Fit coefficients go
+under ``<CACHE_DIR>/<SEARCH_MODEL>/``.  The legacy broad-search JSON files are
+not read or updated by this script.
 
 The *best* model is the one with the lowest test-set energy RMSE among those
 where **all** TBLG relaxations converged and interlayer separations satisfy
@@ -37,11 +34,12 @@ Usage (from repo root or from this directory)::
 
     cd uncertainty_quantification/
     python pod_hyperparameter_search.py
+    python pod_hyperparameter_search.py --fresh   # restart: refit all configs (clears cache)
 
-Outputs (under ``uncertainty_quantification/``) are namespaced, e.g.
-``pod_hyperparam_search_results_POD_energy.json`` /
-``pod_hyperparam_search_cache/POD_energy/<hash>.npz`` vs
-``..._TETB_POD.json`` / ``.../TETB_POD/<hash>.npz``.
+Outputs (under ``uncertainty_quantification/pod_hyperparam_search/``):
+
+* Results — ``pod_hyperparam_search.json`` and ``pod_hyperparam_search.csv``
+* Fit cache — ``pod_hyperparam_search_cache/<SEARCH_MODEL>/<hash>.npz``
 
 Edit :data:`SEARCH_MODEL` and the constants in the ``USER-EDITABLE CONFIGURATION``
 section below.  ``INCLUDE_INTRALAYER`` applies only when ``SEARCH_MODEL == "POD_energy"``.
@@ -65,6 +63,7 @@ import itertools
 import json
 import multiprocessing
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -76,8 +75,9 @@ import numpy as np
 # Path bootstrap — works whether run from repo root or from this directory
 # ---------------------------------------------------------------------------
 _THIS_DIR = Path(__file__).resolve().parent
-_REPO_ROOT = _THIS_DIR.parent
-for _p in (str(_REPO_ROOT / "src"), str(_THIS_DIR)):
+_UQ_DIR = _THIS_DIR.parent
+_REPO_ROOT = _UQ_DIR.parent
+for _p in (str(_REPO_ROOT / "src"), str(_UQ_DIR)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
@@ -87,7 +87,7 @@ for _p in (str(_REPO_ROOT / "src"), str(_THIS_DIR)):
 
 # Which model to search: ``"POD_energy"`` (standalone POD) or ``"TETB_POD"``
 # (residual POD coefficients for ``TETB_PODLammpsCalculator``).
-SEARCH_MODEL: str = "TETB_POD"
+SEARCH_MODEL: str = "POD_energy"
 
 # --- TETB_POD only: fixed tight-binding / ACSF hopping knobs for the subtracted
 # TB + Ewald baseline (same role as ``tb_M`` / ``tb_W`` / ``r_cut`` in
@@ -106,27 +106,37 @@ TETB_RIDGE_ACSF: float = 0.1
 # hashed into the trial cache filename.
 # Regularization is independent of architecture and is tried for every config.
 #
+# **Stricter phase-2 grid** (from ``pod_hyperparam_search_results_new.csv``):
+# Among 134 / 2889 trials with ``meets_all_criteria``, lowest test RMSE and
+# median RMSE cluster at:
+#   bessel_polynomial_degree = 2
+#   inverse_polynomial_degree = 8
+#   four_body_radial = 2, four_body_angular = 2
+# (``four_body_radial=0``, ``four_body_angular=0`` gives marginally lower test
+# RMSE but drops four-body terms entirely; ``4``/``2`` matches POD_index_0.)
+# Vary two- and three-body counts only; see ``_iter_valid_configs`` ordering rules.
+#
 # Estimated runtime: each trial takes ~5-15 s (fit) + up to ~30-60 s per TBLG angle
 # (fewer if the first angle fails and the rest are skipped).
 # Reduce the grid or set MAX_TRIALS to limit total wall time.
 GRID: dict[str, list] = {
-    "rcut":               [6.0],
-    "two_body_radial":    [6, 8, 10],
-    "three_body_radial":  [4, 6,8],
-    "three_body_angular": [4,6],
-    "four_body_radial":   [0, 2, 4,8],
-    "four_body_angular":  [0, 2,4],
-    "five_body_radial":   [0],
-    "five_body_angular":  [0],
+    "rcut":               [7.0],
+    "two_body_radial":    list(range(6, 14, 1)),  # 6, 7, …, 14
+    "three_body_radial":  [4, 6, 8,10],
+    "three_body_angular": [4, 6,8],
+    "four_body_radial":   [2], 
+    "four_body_angular":  [2], 
+    "five_body_radial":   [0], 
+    "five_body_angular":  [0], 
     "six_body_radial":    [0],
     "six_body_angular":   [0],
     "seven_body_radial":  [0],
     "seven_body_angular": [0],
     "regularization":     [1e-12],
-    "weight_energy":      [1000.0],
+    "weight_energy":      [100.0],
     "weight_force":       [1.0],
-    "bessel_polynomial_degree": [0, 2,4,6],
-    "inverse_polynomial_degree": [8,10,12,14],
+    "bessel_polynomial_degree": [8],
+    "inverse_polynomial_degree": [12],
 }
 
 # Set to an integer to cap total trials (configs are shuffled first so the
@@ -137,21 +147,23 @@ MAX_TRIALS: Optional[int] = None
 # ``TETB_POD`` uses the default ``DataLoader`` interlayer + hopping bundle).
 INCLUDE_INTRALAYER: bool = True
 
+# DFT reference for bilayer energy training: ``"rVV10"`` (default),
+# ``"MBD"`` (``data/bilayer_graphene_MBD.xyz``), or ``"QMC"``.
+# Override at runtime with ``--level-of-theory``.
+LEVEL_OF_THEORY: str = "rVV10"
+
 # Fixed random seed and test-set fraction for the train / test split.
 DATA_SPLIT_SEED: int = 42
 TEST_FRACTION: float = 0.20
 
-# TBLG twist angles (degrees) to test relaxation stability (order matters: if the
-# first entry fails criteria, remaining angles are skipped — see ``_run_trial``).
+# TBLG twist angles (degrees) to test relaxation stability.
 TBLG_THETAS: list[float] = [21.78, 9.43]
 
-# TBLG relaxation parameters — mirror the pod_energy case in test_relaxation.py:
-#   RelaxationModelCase(relax_etol=1e-9, relax_ftol=1e-9, relax_maxiter=10_000,
-#                       relax_maxeval=200_000)
-#   test_tblg_relaxation_stable: ftol=1e-2, maxiter=max(10000,8000), maxeval=max(200000,800000)
-RELAX_ETOL: float = 1e-9     # eV  — energy tolerance (LAMMPS minimize arg 1)
-RELAX_FTOL: float = 1e-2     # eV/Å — force tolerance  (LAMMPS minimize arg 2)
-RELAX_MAX_STEPS: int = 2_000
+# TBLG relaxation parameters. ASE FIRE uses RELAX_FTOL as ``fmax`` and
+# RELAX_MAX_STEPS as its maximum number of optimizer steps.
+RELAX_ETOL: float = 1e-9     # retained for the common calculator API
+RELAX_FTOL: float = 1e-3     # eV/Å
+RELAX_MAX_STEPS: int = 1_000
 RELAX_MAX_EVAL: int = 800_000
 
 # Accepted interlayer separation range (Å) for relaxed TBLG structures.
@@ -165,18 +177,51 @@ LAMMPS_EXEC: str = "/mnt/c/Users/Daniel/Documents/research/lammps/build/lmp"
 # so standalone POD and TETB+POD residual searches never clobber each other.
 CACHE_DIR: str = "pod_hyperparam_search_cache"
 
+# Primary search outputs (JSON + CSV); consumed by ``pod_model_selection``.
+RESULTS_STEM = "pod_hyperparam_search"
+
+
+def _level_of_theory_tag() -> str:
+    """Suffix for cache / results paths so different LOTs do not collide."""
+    lot = str(LEVEL_OF_THEORY).strip()
+    if lot.lower() == "rvv10":
+        return ""
+    return f"_{lot}"
+
+
+def _cache_subdir() -> str:
+    return f"{SEARCH_MODEL}{_level_of_theory_tag()}"
+
 
 def _results_json_path() -> Path:
-    return _THIS_DIR / f"pod_hyperparam_search_results_{SEARCH_MODEL}.json"
+    return _THIS_DIR / f"{RESULTS_STEM}{_level_of_theory_tag()}.json"
 
 
 def _results_csv_path() -> Path:
-    return _THIS_DIR / f"pod_hyperparam_search_results_{SEARCH_MODEL}.csv"
+    return _THIS_DIR / f"{RESULTS_STEM}{_level_of_theory_tag()}.csv"
+
+
+def _legacy_broad_results_json_path() -> Path:
+    """Legacy broad-search JSON (not used for resume)."""
+    return _THIS_DIR / f"pod_hyperparam_search_results_{SEARCH_MODEL}.json"
+
+
+def _load_results_for_resume() -> list[dict]:
+    """Load completed trials for resume."""
+    path = _results_json_path()
+    if not path.is_file():
+        return []
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except Exception:
+        return []
+    return list(data) if isinstance(data, list) else []
 
 
 def _results_json_read_candidates() -> list[Path]:
-    """Try canonical namespaced JSON first, then legacy untagged file (POD_energy only)."""
-    paths = [_results_json_path()]
+    """Try legacy namespaced JSON first, then untagged legacy file (POD_energy only)."""
+    paths = [_legacy_broad_results_json_path()]
     if SEARCH_MODEL == "POD_energy":
         legacy = _THIS_DIR / "pod_hyperparam_search_results.json"
         if legacy.resolve() != paths[0].resolve():
@@ -185,8 +230,8 @@ def _results_json_read_candidates() -> list[Path]:
 
 
 def _load_existing_results_for_resume() -> tuple[list[dict], Path, Optional[Path]]:
-    """Return ``(results, canonical_write_path, path_actually_read)``."""
-    canonical = _results_json_path()
+    """Return ``(results, canonical_write_path, path_actually_read)`` — legacy broad search."""
+    canonical = _legacy_broad_results_json_path()
     for p in _results_json_read_candidates():
         if not p.is_file():
             continue
@@ -346,6 +391,125 @@ def _iter_valid_configs() -> list[dict]:
     return out
 
 
+def _params_finite(
+    pod_params: np.ndarray,
+    tb_params: Optional[np.ndarray] = None,
+) -> bool:
+    pod_ok = np.all(np.isfinite(np.asarray(pod_params, dtype=float)))
+    if not pod_ok:
+        return False
+    if tb_params is None:
+        return True
+    return bool(np.all(np.isfinite(np.asarray(tb_params, dtype=float))))
+
+
+def _test_metrics_finite(err: dict[str, float]) -> bool:
+    for key in ("energy_mae_per_atom_eV", "energy_rmse_per_atom_eV"):
+        val = err.get(key)
+        if val is None or not np.isfinite(float(val)):
+            return False
+    return True
+
+
+def _attempt_fit(
+    cfg: dict,
+    hyperparams: dict,
+    hyperparams_str: str,
+    train_atoms: list,
+    rcut: float,
+    test_atoms: list,
+    test_E: np.ndarray,
+    tetb_aux: Optional[dict[str, Any]],
+) -> tuple[
+    Optional[np.ndarray],
+    Optional[np.ndarray],
+    Optional[dict[str, float]],
+    float,
+    Optional[str],
+]:
+    """
+    Fit once with the GRID regularization value in ``cfg``.
+
+    Returns ``(pod_params, tb_params, test_err, fit_time_s, error_msg)``.
+    On failure ``error_msg`` is set and the other fields are ``None`` / ``0``.
+    """
+    t0 = time.time()
+    reg = float(cfg["regularization"])
+    try:
+        if SEARCH_MODEL == "POD_energy":
+            pod_params = fit_pod(
+                hyperparams_str,
+                train_atoms,
+                lammps_exec=LAMMPS_EXEC,
+                regularization=reg,
+                weight_energy=cfg["weight_energy"],
+                weight_force=cfg["weight_force"],
+            )
+            tb_params = None
+        else:
+            xh = (tetb_aux or {}).get("x_hopping")
+            yh = (tetb_aux or {}).get("y_hopping")
+            e_train = np.array(
+                [float(a.get_potential_energy()) for a in train_atoms],
+                dtype=float,
+            )
+            f_train = [np.asarray(a.get_forces(), dtype=float) for a in train_atoms]
+            tb_params, pod_params, _ = fit_tetb_residual_pod(
+                train_atoms,
+                e_train,
+                f_train,
+                M=int(TETB_TB_M),
+                W=int(TETB_TB_W),
+                r_cut=float(TETB_TB_RCUT),
+                pod_hyperparams=hyperparams,
+                pod_cutoff=float(rcut),
+                xdata_hopping=xh,
+                ydata_hopping=yh,
+                lammps_exec=LAMMPS_EXEC,
+                ridge_acsf=float(TETB_RIDGE_ACSF),
+                regularization=reg,
+                weight_energy=float(cfg["weight_energy"]),
+                weight_force=float(cfg["weight_force"]),
+            )
+            pod_params = np.asarray(pod_params, dtype=float).ravel()
+            tb_params = np.asarray(tb_params, dtype=float).ravel()
+    except Exception as exc:
+        fit_time = float(time.time() - t0)
+        err_msg = f"{type(exc).__name__}: {str(exc)[:200]}"
+        print(f"  [fit] reg={reg:.0e} exception: {err_msg}", flush=True)
+        return None, None, None, fit_time, err_msg
+
+    if not _params_finite(pod_params, tb_params):
+        fit_time = float(time.time() - t0)
+        err_msg = "non-finite POD/TB coefficients"
+        print(f"  [fit] reg={reg:.0e} {err_msg}", flush=True)
+        return None, None, None, fit_time, err_msg
+
+    try:
+        err = _evaluate_test_error(
+            hyperparams,
+            pod_params,
+            test_atoms,
+            test_E,
+            rcut,
+            tb_params=tb_params,
+        )
+    except Exception as exc:
+        fit_time = float(time.time() - t0)
+        err_msg = f"test eval {type(exc).__name__}: {str(exc)[:200]}"
+        print(f"  [fit] reg={reg:.0e} {err_msg}", flush=True)
+        return None, None, None, fit_time, err_msg
+
+    if not _test_metrics_finite(err):
+        fit_time = float(time.time() - t0)
+        err_msg = "non-finite test MAE/RMSE"
+        print(f"  [fit] reg={reg:.0e} {err_msg}", flush=True)
+        return None, None, None, fit_time, err_msg
+
+    fit_time = float(time.time() - t0)
+    return pod_params, tb_params, err, fit_time, None
+
+
 # ---------------------------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------------------------
@@ -381,15 +545,21 @@ def _load_and_split() -> tuple[list, list, np.ndarray, int, Optional[dict[str, A
             f"SEARCH_MODEL must be 'POD_energy' or 'TETB_POD', got {SEARCH_MODEL!r}",
         )
 
-    print(f"[search] Loading training data ({model_key})…", flush=True)
+    print(
+        f"[search] Loading training data ({model_key}, level_of_theory={LEVEL_OF_THEORY})…",
+        flush=True,
+    )
     if SEARCH_MODEL == "POD_energy":
         _, _, xdata, _, _, ydata = load_data_for_model(
-            "POD_energy", supercells=1, include_intralayer=INCLUDE_INTRALAYER,
+            "POD_energy",
+            supercells=1,
+            level_of_theory=LEVEL_OF_THEORY,
+            include_intralayer=INCLUDE_INTRALAYER,
         )
         tetb_aux: Optional[dict[str, Any]] = None
     else:
         _, _, xdata, _, _, ydata = load_data_for_model(
-            "TETB_POD", supercells=1, level_of_theory="rVV10",
+            "TETB_POD", supercells=1, level_of_theory=LEVEL_OF_THEORY,
         )
         tetb_aux = {
             "x_hopping": xdata.get("hopping"),
@@ -567,6 +737,52 @@ def _build_tblg_atoms(theta_deg: float) -> Optional[object]:
 # TBLG relaxation
 # ---------------------------------------------------------------------------
 
+def _plot_tblg_cross_section(atoms, theta_deg: float) -> Path:
+    """Scatter top-layer xy positions colored by interlayer separation.
+
+    Interlayer separation per atom is ``2·|z − ⟨z⟩|`` (Å), where ``⟨z⟩`` is the
+    mean z over all atoms.  Only top-layer atoms (``z > ⟨z⟩``) are plotted.
+    """
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as plt
+
+    plotted = atoms.copy()
+    plotted.wrap()
+    pos = np.asarray(plotted.get_positions(wrap=False), dtype=float)
+
+    mean_z = float(np.mean(pos[:, 2]))
+    top_mask = pos[:, 2] > mean_z
+    top_pos = pos[top_mask]
+    if top_pos.shape[0] < 1:
+        raise ValueError("No top-layer atoms found for scatter plot")
+
+    separation = 2.0 * np.abs(top_pos[:, 2] - mean_z)
+
+    fig, ax = plt.subplots(figsize=(6.5, 5.6))
+    sc = ax.scatter(
+        top_pos[:, 0],
+        top_pos[:, 1],
+        c=separation,
+        s=25,
+        cmap="viridis",
+        linewidths=0.0,
+    )
+    cb = fig.colorbar(sc, ax=ax)
+    cb.set_label(r"interlayer separation $2\,|z_i - \langle z \rangle|$ (Å)")
+    ax.set_xlabel("x (Å)")
+    ax.set_ylabel("y (Å)")
+    ax.set_title(rf"$\theta = {float(theta_deg):g}^\circ$")
+    ax.set_aspect("equal", adjustable="box")
+    fig.tight_layout()
+
+    out = _THIS_DIR / f"tmp_tblg_cross_section_theta_{float(theta_deg):g}.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return out
+
+
 def _attempt_tblg_relax(
     atoms0,
     hyperparams: dict,
@@ -574,14 +790,9 @@ def _attempt_tblg_relax(
     rcut: float,
     *,
     tb_params: Optional[np.ndarray] = None,
+    theta_deg: Optional[float] = None,
 ) -> dict[str, Any]:
-    """Relax a TBLG structure with LAMMPS FIRE.
-
-    Mirrors ``test_tblg_relaxation_stable`` in ``test_relaxation.py``:
-      - ``etol=RELAX_ETOL`` (1e-9 eV), ``ftol=RELAX_FTOL`` (1e-2 eV/Å)
-      - ``maxiter=RELAX_MAX_STEPS`` (10 000), ``maxeval=RELAX_MAX_EVAL`` (800 000)
-      - Convergence check: ``max|F| ≤ RELAX_FTOL + 1e-2``
-    """
+    """Relax a TBLG structure with ASE FIRE and plot its cross section."""
     calc = _make_energy_calculator(
         hyperparams, pod_params, rcut, tb_params=tb_params,
     )
@@ -602,6 +813,8 @@ def _attempt_tblg_relax(
         "sep_min_in_target": None,
         "sep_max_in_target": None,
         "ab_lt_aa": None,
+        "cross_section_plot": None,
+        "cross_section_plot_error": None,
         "error": None,
     }
 
@@ -614,10 +827,9 @@ def _attempt_tblg_relax(
             result["error"] = f"Pre-relax force explosion: max|F|={fmax0:.2e} eV/Å"
             return result
 
-        # Exact call pattern from _run_relax (lammps branch) in test_relaxation.py.
         relaxed = calc.relax_structure(
             atoms,
-            relax_backend="lammps",
+            relax_backend="ase",
             etol=RELAX_ETOL,
             ftol=RELAX_FTOL,
             maxiter=RELAX_MAX_STEPS,
@@ -628,8 +840,17 @@ def _attempt_tblg_relax(
         f = np.asarray(relaxed.get_forces(), dtype=float)
         fmax_after = float(np.max(np.linalg.norm(f, axis=1)))
         result["fmax_after"] = fmax_after
-        # Same threshold as test_relaxation: fmax <= ftol + 1e-2
-        result["converged"] = bool(fmax_after <= RELAX_FTOL + 1e-2)
+        result["converged"] = bool(fmax_after <= RELAX_FTOL * (1.0 + 1e-6))
+
+        if theta_deg is not None:
+            try:
+                out = _plot_tblg_cross_section(relaxed, theta_deg)
+                result["cross_section_plot"] = str(out)
+                print(f"  [tblg θ={theta_deg:g}°] wrote cross section: {out}", flush=True)
+            except Exception as exc:
+                result["cross_section_plot_error"] = (
+                    f"{type(exc).__name__}: {str(exc)[:280]}"
+                )
 
         if result["converged"] or fmax_after < 10.0:
             seps = _layer_separations(relaxed)
@@ -660,12 +881,18 @@ def _tblg_relax_worker(
     pod_params: np.ndarray,
     rcut: float,
     tb_params,
+    theta_deg: float,
     result_queue,
 ) -> None:
     """Subprocess target: run ``_attempt_tblg_relax`` and push the result dict."""
     try:
         res = _attempt_tblg_relax(
-            atoms0, hyperparams, pod_params, rcut, tb_params=tb_params,
+            atoms0,
+            hyperparams,
+            pod_params,
+            rcut,
+            tb_params=tb_params,
+            theta_deg=theta_deg,
         )
     except Exception as exc:
         res = {
@@ -682,6 +909,8 @@ def _tblg_relax_worker(
             "sep_min_in_target": None,
             "sep_max_in_target": None,
             "ab_lt_aa": None,
+            "cross_section_plot": None,
+            "cross_section_plot_error": None,
             "error": f"{type(exc).__name__}: {str(exc)[:280]}",
         }
     result_queue.put(res)
@@ -696,6 +925,7 @@ def _attempt_tblg_relax_safe(
     pod_params: np.ndarray,
     rcut: float,
     tb_params,
+    theta_deg: float,
     *,
     timeout: float = 600.0,
 ) -> dict[str, Any]:
@@ -726,6 +956,8 @@ def _attempt_tblg_relax_safe(
             "sep_min_in_target": None,
             "sep_max_in_target": None,
             "ab_lt_aa": None,
+            "cross_section_plot": None,
+            "cross_section_plot_error": None,
             "error": msg,
         }
 
@@ -733,7 +965,7 @@ def _attempt_tblg_relax_safe(
     q = ctx.Queue()
     p = ctx.Process(
         target=_tblg_relax_worker,
-        args=(atoms0, hyperparams, pod_params, rcut, tb_params, q),
+        args=(atoms0, hyperparams, pod_params, rcut, tb_params, theta_deg, q),
         daemon=True,
     )
     p.start()
@@ -795,18 +1027,22 @@ def _tblg_skipped_after_prior_angle_failed(prior_theta_deg: float) -> dict[str, 
 
 def _cache_candidate_paths(h: str) -> list[Path]:
     """Primary cache file first; legacy flat ``<CACHE_DIR>/<hash>.npz`` last (POD_energy only)."""
-    primary = _THIS_DIR / CACHE_DIR / SEARCH_MODEL / f"{h}.npz"
+    subdir = _cache_subdir()
+    primary = _THIS_DIR / CACHE_DIR / subdir / f"{h}.npz"
     out = [primary]
-    if SEARCH_MODEL == "POD_energy":
+    if SEARCH_MODEL == "POD_energy" and not _level_of_theory_tag():
         legacy = _THIS_DIR / CACHE_DIR / f"{h}.npz"
         if legacy.resolve() != primary.resolve():
             out.append(legacy)
+        legacy_model = _THIS_DIR / CACHE_DIR / SEARCH_MODEL / f"{h}.npz"
+        if legacy_model.resolve() != primary.resolve():
+            out.append(legacy_model)
     return out
 
 
 def _cache_path(h: str) -> Path:
-    """Canonical path for **writing** new fit caches (always under ``SEARCH_MODEL``)."""
-    return _THIS_DIR / CACHE_DIR / SEARCH_MODEL / f"{h}.npz"
+    """Canonical path for **writing** new fit caches."""
+    return _THIS_DIR / CACHE_DIR / _cache_subdir() / f"{h}.npz"
 
 
 def _load_cached_fit(h: str) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
@@ -907,6 +1143,7 @@ def _run_trial(
     # --- Fit (or load from cache) ------------------------------------------
     pod_params: Optional[np.ndarray] = None
     tb_params: Optional[np.ndarray] = None
+    test_err_from_fit: Optional[dict[str, float]] = None
     pod_cached, tb_cached = _load_cached_fit(h)
     cache_ok = pod_cached is not None and (
         SEARCH_MODEL != "TETB_POD" or tb_cached is not None
@@ -919,49 +1156,24 @@ def _run_trial(
         result["fit_time_s"] = 0.0
     else:
         hyperparams_str = pod_hyperparams_to_str(hyperparams, rcut, ["C"])
-        t0 = time.time()
-        try:
-            if SEARCH_MODEL == "POD_energy":
-                pod_params = fit_pod(
-                    hyperparams_str,
-                    train_atoms,
-                    lammps_exec=LAMMPS_EXEC,
-                    regularization=cfg["regularization"],
-                    weight_energy=cfg["weight_energy"],
-                    weight_force=cfg["weight_force"],
-                )
-            else:
-                xh = (tetb_aux or {}).get("x_hopping")
-                yh = (tetb_aux or {}).get("y_hopping")
-                e_train = np.array(
-                    [float(a.get_potential_energy()) for a in train_atoms],
-                    dtype=float,
-                )
-                f_train = [np.asarray(a.get_forces(), dtype=float) for a in train_atoms]
-                tb_params, pod_params, _ = fit_tetb_residual_pod(
-                    train_atoms,
-                    e_train,
-                    f_train,
-                    M=int(TETB_TB_M),
-                    W=int(TETB_TB_W),
-                    r_cut=float(TETB_TB_RCUT),
-                    pod_hyperparams=hyperparams,
-                    pod_cutoff=float(rcut),
-                    xdata_hopping=xh,
-                    ydata_hopping=yh,
-                    lammps_exec=LAMMPS_EXEC,
-                    ridge_acsf=float(TETB_RIDGE_ACSF),
-                    regularization=float(cfg["regularization"]),
-                    weight_energy=float(cfg["weight_energy"]),
-                    weight_force=float(cfg["weight_force"]),
-                )
-                pod_params = np.asarray(pod_params, dtype=float).ravel()
-                tb_params = np.asarray(tb_params, dtype=float).ravel()
-        except Exception as exc:
-            result["error_from_fit"] = f"{type(exc).__name__}: {str(exc)[:300]}"
-            print(f"  [fit] FAILED: {result['error_from_fit']}", flush=True)
+        pod_params, tb_params, test_err_from_fit, fit_time, fit_err = (
+            _attempt_fit(
+                cfg,
+                hyperparams,
+                hyperparams_str,
+                train_atoms,
+                rcut,
+                test_atoms,
+                test_E,
+                tetb_aux,
+            )
+        )
+        result["fit_time_s"] = fit_time
+        if fit_err is not None:
+            result["error_from_fit"] = fit_err
+            print(f"  [fit] FAILED: {fit_err}", flush=True)
             return result
-        result["fit_time_s"] = float(time.time() - t0)
+        assert pod_params is not None
         print(
             f"  [fit] done in {result['fit_time_s']:.1f}s  n_pod={pod_params.size}"
             + (
@@ -976,44 +1188,42 @@ def _run_trial(
     assert pod_params is not None
 
     # --- Test-set evaluation -----------------------------------------------
-    try:
-        err = _evaluate_test_error(
-            hyperparams,
-            pod_params,
-            test_atoms,
-            test_E,
-            rcut,
-            tb_params=tb_params,
-        )
-        result["test_energy_mae_per_atom_eV"]  = err["energy_mae_per_atom_eV"]
+    if test_err_from_fit is not None:
+        err = test_err_from_fit
+        result["test_energy_mae_per_atom_eV"] = err["energy_mae_per_atom_eV"]
         result["test_energy_rmse_per_atom_eV"] = err["energy_rmse_per_atom_eV"]
         print(
             f"  [test] MAE={err['energy_mae_per_atom_eV']*1e3:.3f} meV/atom"
             f"  RMSE={err['energy_rmse_per_atom_eV']*1e3:.3f} meV/atom",
             flush=True,
         )
-    except Exception as exc:
-        print(f"  [test] evaluation failed: {exc}", flush=True)
-        result["error_from_fit"] = (result.get("error_from_fit") or "") + \
-            f" | test eval: {type(exc).__name__}: {str(exc)[:200]}"
+    else:
+        try:
+            err = _evaluate_test_error(
+                hyperparams,
+                pod_params,
+                test_atoms,
+                test_E,
+                rcut,
+                tb_params=tb_params,
+            )
+            result["test_energy_mae_per_atom_eV"] = err["energy_mae_per_atom_eV"]
+            result["test_energy_rmse_per_atom_eV"] = err["energy_rmse_per_atom_eV"]
+            print(
+                f"  [test] MAE={err['energy_mae_per_atom_eV']*1e3:.3f} meV/atom"
+                f"  RMSE={err['energy_rmse_per_atom_eV']*1e3:.3f} meV/atom",
+                flush=True,
+            )
+        except Exception as exc:
+            print(f"  [test] evaluation failed: {exc}", flush=True)
+            result["error_from_fit"] = (result.get("error_from_fit") or "") + \
+                f" | test eval: {type(exc).__name__}: {str(exc)[:200]}"
 
     # --- TBLG relaxation ---------------------------------------------------
     all_tblg_ok = True
-    first_angle_failed_theta: Optional[float] = None
 
-    for idx, theta in enumerate(TBLG_THETAS):
+    for theta in TBLG_THETAS:
         atoms0 = tblg_cache.get(theta)
-
-        if first_angle_failed_theta is not None and idx > 0:
-            sk = _tblg_skipped_after_prior_angle_failed(first_angle_failed_theta)
-            result["tblg"][str(theta)] = {**sk, "relax_time_s": 0.0}
-            all_tblg_ok = False
-            print(
-                f"  [tblg θ={theta}°] skipped (first angle θ={first_angle_failed_theta:g}° "
-                "failed criteria; not attempted)",
-                flush=True,
-            )
-            continue
 
         if atoms0 is None:
             result["tblg"][str(theta)] = {"skipped": "flatgraphene not installed"}
@@ -1023,7 +1233,7 @@ def _run_trial(
         print(f"  [tblg θ={theta}°] n_atoms={len(atoms0)} relaxing…", flush=True)
         t1 = time.time()
         tr = _attempt_tblg_relax_safe(
-            atoms0, hyperparams, pod_params, rcut, tb_params,
+            atoms0, hyperparams, pod_params, rcut, tb_params, float(theta),
         )
         elapsed = time.time() - t1
 
@@ -1035,8 +1245,6 @@ def _run_trial(
         result["tblg"][str(theta)] = {**tr, "relax_time_s": elapsed}
 
         passed = _tblg_criteria_met(tr)
-        if idx == 0 and not passed:
-            first_angle_failed_theta = float(theta)
 
         status = "✓" if passed else "✗"
         sep_str = (
@@ -1057,6 +1265,7 @@ def _run_trial(
 
     result["meets_all_criteria"] = bool(
         result["test_energy_rmse_per_atom_eV"] is not None
+        and np.isfinite(result["test_energy_rmse_per_atom_eV"])
         and all_tblg_ok
     )
     return result
@@ -1154,7 +1363,7 @@ def _tblg_relax_for_plot_worker(
     try:
         relaxed = calc.relax_structure(
             atoms,
-            relax_backend="lammps",
+            relax_backend="ase",
             etol=RELAX_ETOL,
             ftol=RELAX_FTOL,
             maxiter=RELAX_MAX_STEPS,
@@ -1519,9 +1728,75 @@ def reevaluate_meets_all_criteria_csv(csv_path: Path) -> tuple[int, int]:
 # Main
 # ---------------------------------------------------------------------------
 
+def _clear_fresh_run_state() -> None:
+    """Remove results JSON/CSV and fit cache so every config is refit from scratch."""
+    for path in (_results_json_path(), _results_csv_path()):
+        if path.is_file():
+            path.unlink()
+            print(f"[search] removed {path.name}", flush=True)
+
+    cache_dir = _THIS_DIR / CACHE_DIR / _cache_subdir()
+    if cache_dir.is_dir():
+        n_removed = sum(1 for p in cache_dir.glob("*.npz") if p.is_file())
+        shutil.rmtree(cache_dir)
+        print(
+            f"[search] cleared fit cache {cache_dir.name}/ ({n_removed} file(s))",
+            flush=True,
+        )
+
+    if SEARCH_MODEL == "POD_energy" and not _level_of_theory_tag():
+        legacy_flat = _THIS_DIR / CACHE_DIR
+        if legacy_flat.is_dir():
+            legacy_npz = list(legacy_flat.glob("*.npz"))
+            for p in legacy_npz:
+                p.unlink()
+            if legacy_npz:
+                print(
+                    f"[search] cleared {len(legacy_npz)} legacy flat cache file(s) "
+                    f"in {CACHE_DIR}/",
+                    flush=True,
+                )
+
+
 def main() -> None:
-    # Work from uncertainty_quantification/ so that DataLoader resolves ../data
-    os.chdir(_THIS_DIR)
+    global LEVEL_OF_THEORY
+
+    import argparse
+
+    parser = argparse.ArgumentParser(description="POD hyperparameter grid search (tightened phase).")
+    parser.add_argument(
+        "--fresh",
+        action="store_true",
+        help=(
+            "Delete results JSON/CSV and cached POD fits "
+            f"({CACHE_DIR}/<model>_<LOT>/) before running."
+        ),
+    )
+    parser.add_argument(
+        "--level-of-theory",
+        default=LEVEL_OF_THEORY,
+        choices=["rVV10", "MBD", "QMC"],
+        help=(
+            "DFT reference for bilayer energy training "
+            "(default: rVV10; MBD uses data/bilayer_graphene_MBD.xyz)."
+        ),
+    )
+    args = parser.parse_args()
+
+    LEVEL_OF_THEORY = str(args.level_of_theory)
+
+    # DataLoader paths are relative to uncertainty_quantification/ (../data → repo data/).
+    os.chdir(_UQ_DIR)
+
+    print(
+        f"[search] level_of_theory={LEVEL_OF_THEORY}  "
+        f"cache={CACHE_DIR}/{_cache_subdir()}/  "
+        f"results={_results_json_path().name}",
+        flush=True,
+    )
+
+    if args.fresh:
+        _clear_fresh_run_state()
 
     json_path = _results_json_path()
     csv_path = _results_csv_path()
@@ -1546,20 +1821,13 @@ def main() -> None:
     # Load data
     train_atoms, test_atoms, test_E, n_train, tetb_aux = _load_and_split()
 
-    # Load existing results (for resumption)
-    existing, json_path, loaded_from = _load_existing_results_for_resume()
+    # Resume from previous trials in pod_hyperparam_search.json / .csv.
+    existing = _load_results_for_resume()
     completed_hashes = {r["hash"] for r in existing}
     results = list(existing)
-    src_msg = loaded_from.name if loaded_from is not None else json_path.name
-    if loaded_from is not None:
-        print(
-            f"[search] Note: resuming from legacy {loaded_from.name}; "
-            f"new checkpoints write to {json_path.name}.",
-            flush=True,
-        )
     print(
-        f"[search] {len(completed_hashes)} trials already completed "
-        f"(loaded from {src_msg}).",
+        f"[search] {len(completed_hashes)} trial(s) already completed "
+        f"(loaded from {json_path.name}).",
         flush=True,
     )
 
@@ -1598,9 +1866,10 @@ def main() -> None:
     if trial_count == 0:
         print("[search] All configs already completed.  Nothing new to run.", flush=True)
 
+    _save_results(results, json_path, csv_path)
     _print_summary(results)
-    print(f"[search] Full results: {json_path}", flush=True)
-    print(f"[search] CSV summary : {csv_path}", flush=True)
+    print(f"[search] Tightened results: {json_path}", flush=True)
+    print(f"[search] Tightened CSV     : {csv_path}", flush=True)
 
 
 if __name__ == "__main__":

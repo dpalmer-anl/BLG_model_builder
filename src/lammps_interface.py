@@ -4,7 +4,9 @@ lammps_interface.py — ASE-compatible calculators using the LAMMPS Python modul
 Provides drop-in replacements for the C++ pybind11-backed *ASECalculator classes
 using the official ``lammps`` Python module (``from lammps import lammps``).
 
-All LAMMPS output (screen + log) is suppressed via ``cmdargs=["-screen","none","-log","none"]``.
+All LAMMPS output (screen + log) is suppressed via
+``cmdargs=["-screen","none","-log","/dev/null"]`` (``none`` can become an empty
+path on some builds and triggers ``Unable to open logfile ''``).
 
 Classes
 -------
@@ -14,6 +16,7 @@ DRIPLammpsCalculator
 TersoffKCLammpsCalculator        (hybrid/overlay Tersoff + KC Full)
 TersoffDRIPLammpsCalculator      (hybrid/overlay Tersoff + DRIP)
 PODLammpsCalculator
+PODD3LammpsCalculator            (hybrid/overlay POD + dispersion/d3 DFT-D3)
 
 Batch evaluation
 ----------------
@@ -28,7 +31,8 @@ rewritten when ``set_parameters`` is called.
 
 Relaxation
 ----------
-    relaxed = calc.relax_structure(atoms, relax_backend='lammps')  # LAMMPS FIRE
+    relaxed = calc.relax_structure(atoms, relax_backend='lammps')  # LAMMPS CG (default)
+    # relaxed = calc.relax_structure(atoms, relax_backend='lammps', min_style='fire')
     relaxed = calc.relax_structure(atoms, relax_backend='ase')     # ASE FIRE
 
 Notes on LAMMPS Python module installation
@@ -59,6 +63,8 @@ from blg_model_builder.potentials import (
     _FIRE_RELAX_DEFAULT_FTOL,
     _FIRE_RELAX_DEFAULT_MAXITER,
     _FIRE_RELAX_DEFAULT_MAXEVAL,
+    _LAMMPS_FIRE_TMIN,
+    _LAMMPS_FIRE_TMAX,
     _annotate_relax_energies,
     _normalize_relax_backend,
     _relax_structure_ase,
@@ -70,27 +76,39 @@ from blg_model_builder.potentials import (
 #  LAMMPS instance factory
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _make_lammps_instance():
+def _make_lammps_instance(comm=None):
     """Create a LAMMPS instance with all output suppressed.
 
-    When running under MPI (e.g. via schwimmbad MPIPool), LAMMPS must be
-    initialized with ``MPI.COMM_SELF`` so that each rank owns an independent,
-    single-process LAMMPS world.  Without this, every LAMMPS call issues MPI
-    collectives over MPI_COMM_WORLD, which deadlocks when the master rank is
-    blocked in pool.map() waiting for worker results while the worker rank's
-    LAMMPS waits for the master to join the collective.
+    Parameters
+    ----------
+    comm
+        Optional MPI communicator.  Default ``None`` uses ``MPI.COMM_SELF`` so
+        each rank owns an independent single-process LAMMPS world (safe for
+        ensemble / schwimmbad pools where ranks do independent work).
+
+        Pass ``MPI.COMM_WORLD`` (or another multi-rank communicator) when a
+        *single* minimize / force evaluation should be domain-decomposed across
+        ranks (e.g. best-fit TBLG relax under ``srun -n 16``).  Every rank that
+        shares that communicator must issue the same LAMMPS commands.
+
+    Logging uses ``/dev/null`` rather than ``none``: some LAMMPS builds treat
+    ``-log none`` as an empty filename and print
+    ``Unable to open logfile ''``.
     """
     from lammps import lammps  # noqa: PLC0415
+
+    # Prefer /dev/null; fall back to OS null device (NUL on Windows).
+    log_path = "/dev/null" if os.name != "nt" else "NUL"
+    cmdargs = ["-screen", "none", "-log", log_path]
     try:
         from mpi4py import MPI  # noqa: PLC0415
-        return lammps(
-            comm=MPI.COMM_SELF,
-            cmdargs=["-screen", "none", "-log", "none"],
-        )
+
+        use_comm = MPI.COMM_SELF if comm is None else comm
+        return lammps(comm=use_comm, cmdargs=cmdargs)
     except (ImportError, TypeError):
         # mpi4py unavailable (serial/OpenMP-only build) or this LAMMPS version
         # does not accept the comm kwarg — fall back to the default communicator.
-        return lammps(cmdargs=["-screen", "none", "-log", "none"])
+        return lammps(cmdargs=cmdargs)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -265,6 +283,72 @@ def _write_lammps_structure(
 #  LAMMPS array helpers (gather / scatter)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _extract_compute_atom_array(
+    lmp,
+    compute_id: str,
+    n_atoms: int,
+    n_cols: int | None = None,
+) -> np.ndarray:
+    """Return a per-atom LAMMPS compute array as ``(n_atoms, n_cols)``."""
+    try:
+        from lammps import LMP_STYLE_ATOM, LMP_TYPE_ARRAY
+    except ImportError:
+        LMP_STYLE_ATOM, LMP_TYPE_ARRAY = 1, 2
+
+    if hasattr(lmp, "numpy") and hasattr(lmp.numpy, "extract_compute"):
+        arr = np.asarray(
+            lmp.numpy.extract_compute(compute_id, LMP_STYLE_ATOM, LMP_TYPE_ARRAY),
+            dtype=np.float64,
+        )
+    else:
+        if n_cols is None:
+            raise RuntimeError(
+                "extract_compute without numpy requires n_cols"
+            )
+        ptr = lmp.extract_compute(compute_id, LMP_STYLE_ATOM, LMP_TYPE_ARRAY)
+        arr = np.asarray(
+            [[float(ptr[i][j]) for j in range(n_cols)] for i in range(n_atoms)],
+            dtype=np.float64,
+        )
+
+    arr = np.asarray(arr, dtype=np.float64)
+    if arr.ndim == 1:
+        if n_cols is None:
+            if arr.size % n_atoms != 0:
+                raise RuntimeError(
+                    f"compute {compute_id!r} length {arr.size} not divisible "
+                    f"by n_atoms={n_atoms}"
+                )
+            n_cols = arr.size // n_atoms
+        arr = arr.reshape(n_atoms, n_cols)
+    elif arr.ndim == 2:
+        if arr.shape[0] == n_atoms:
+            pass
+        elif arr.shape[1] == n_atoms:
+            arr = arr.T
+        else:
+            raise RuntimeError(
+                f"compute {compute_id!r} returned shape {arr.shape}, "
+                f"n_atoms={n_atoms}"
+            )
+    else:
+        raise RuntimeError(
+            f"compute {compute_id!r} returned ndim={arr.ndim} array"
+        )
+    if arr.shape[0] != n_atoms:
+        raise RuntimeError(
+            f"compute {compute_id!r} returned shape {arr.shape}, "
+            f"expected n_atoms={n_atoms}"
+        )
+    if n_cols is not None and arr.shape[1] != n_cols:
+        # POD coeff files often include a constant/shift term not present
+        # in compute pod/atom.  Keep the compute's column count.
+        pass
+    # LAMMPS numpy extract_compute is a view into LAMMPS-owned memory.
+    # Copy before the caller uncomputes / clears, or later numpy ops segfault.
+    return np.array(arr, dtype=np.float64, copy=True)
+
+
 def _gather_forces(lmp, N: int) -> np.ndarray:
     """Gather forces from LAMMPS (LAMMPS metal frame) → (N, 3) ndarray."""
     f_c = lmp.gather_atoms("f", 1, 3)
@@ -304,6 +388,9 @@ class LammpsCalculatorBase:
     def __init__(self) -> None:
         self._tmpdir: str = tempfile.mkdtemp(prefix="lammps_calc_")
         self._lmp = None
+        # None → COMM_SELF (independent per-rank LAMMPS).  Set to COMM_WORLD
+        # via :meth:`set_lammps_comm` for multi-rank force/minimize parallelization.
+        self._lammps_comm = None
         self._last_cell: Optional[np.ndarray] = None
         self._last_natoms: Optional[int] = None
         self._batch_files: Optional[List[str]] = None
@@ -333,9 +420,22 @@ class LammpsCalculatorBase:
                 pass
             self._lmp = None
 
+    def set_lammps_comm(self, comm) -> None:
+        """Set the MPI communicator used for the next LAMMPS instance.
+
+        Must be called before the first force/energy/relax call (or after
+        :meth:`close`).  Pass ``mpi4py.MPI.COMM_WORLD`` so one minimize is
+        parallelized across ranks; leave unset (default) for ``COMM_SELF``.
+        """
+        if self._lmp is not None:
+            self.close()
+        self._lammps_comm = comm
+        self._last_cell = None
+        self._last_natoms = None
+
     def _get_lmp(self):
         if self._lmp is None:
-            self._lmp = _make_lammps_instance()
+            self._lmp = _make_lammps_instance(comm=self._lammps_comm)
         return self._lmp
 
     # ── Subclass interface ─────────────────────────────────────────────────────
@@ -364,6 +464,10 @@ class LammpsCalculatorBase:
 
     # ── LAMMPS setup ───────────────────────────────────────────────────────────
 
+    def _neigh_modify_command(self) -> str:
+        """Return the ``neigh_modify`` line used after ``neighbor`` setup."""
+        return "neigh_modify delay 0 every 1 check yes"
+
     def _setup_lammps(self, atoms) -> None:
         """Full LAMMPS setup: clear, read structure file, configure potential."""
         lmp = self._get_lmp()
@@ -381,7 +485,7 @@ class LammpsCalculatorBase:
         lmp.command("newton on")
         lmp.command(f"read_data {struct_path}")
         lmp.command("neighbor 0.3 bin")
-        lmp.command("neigh_modify delay 0 every 1 check yes")
+        lmp.command(self._neigh_modify_command())
         for cmd in self._pair_style_commands(self._tmpdir):
             lmp.command(cmd)
         self._last_cell = np.array(atoms.get_cell())
@@ -521,7 +625,7 @@ class LammpsCalculatorBase:
                 lmp.command("newton on")
                 lmp.command(f"read_data {data_file}")
                 lmp.command("neighbor 0.3 bin")
-                lmp.command("neigh_modify delay 0 every 1 check yes")
+                lmp.command(self._neigh_modify_command())
                 for cmd in self._pair_style_commands(self._tmpdir):
                     lmp.command(cmd)
                 lmp.command("run 0")
@@ -559,23 +663,60 @@ class LammpsCalculatorBase:
         relax_fire_kwargs: Optional[Dict[str, Any]] = None,
         # legacy keyword accepted for API compatibility with *ASECalculator classes
         timestep: float = None,
+        *,
+        fire_tmin: float = _LAMMPS_FIRE_TMIN,
+        fire_tmax: float = _LAMMPS_FIRE_TMAX,
+        dump_path: Optional[str] = None,
+        log_path: Optional[str] = None,
+        dump_every: int = 100,
+        min_style: str = "cg",
     ):
         """Relax the atomic geometry and return a new ``Atoms`` at the minimum.
 
         Parameters
         ----------
         relax_backend : ``'lammps'`` (default) or ``'ase'``
-            ``'lammps'``: LAMMPS ``min_style fire`` minimisation.
-            ``'ase'``:    ASE :class:`~ase.optimize.FIRE` (calls ``calculate``
+            ``'lammps'``: LAMMPS ``minimize`` (see ``min_style``).
+            ``'ase'``:    ASE optimizer (calls ``calculate``
                           iteratively; uses position injection for speed).
         etol, ftol, maxiter, maxeval
             Passed to LAMMPS ``minimize etol ftol maxiter maxeval``, or
-            ``fmax=ftol, steps=maxiter`` for the ASE FIRE backend.
+            ``fmax=ftol, steps=maxiter`` for the ASE backend.
+
+            **Force tolerance equivalence (ASE vs LAMMPS):** ASE stops when
+            ``max_i ||F_i|| ≤ fmax``.  LAMMPS default ``minimize`` treats
+            ``ftol`` as the 2-norm of the *full* 3N force vector
+            (``min_modify norm two``), which is *not* the same criterion.
+            This method sets ``min_modify norm max`` so that LAMMPS ``ftol``
+            matches ASE ``fmax``: stop when the largest per-atom force length
+            is below ``ftol``.  Pass the same numeric value for ASE ``--relax-ftol``
+            / ``fmax`` and LAMMPS ``ftol``.
         relax_fire_kwargs : dict, optional
-            Extra keyword arguments forwarded to :class:`~ase.optimize.FIRE`
+            Extra keyword arguments forwarded to the ASE optimizer
             (only used when ``relax_backend='ase'``).
+        fire_tmin, fire_tmax
+            Caps for LAMMPS FIRE adaptive timestep (``min_modify tmin/tmax``).
+            Defaults are conservative to avoid ``Lost atoms`` on bilayer cells.
+            Ignored when ``min_style`` is not ``fire``.
+        dump_path : str, optional
+            If set (LAMMPS backend), write a minimize trajectory with
+            ``dump ... custom N`` to this file (``N`` from ``dump_every``).
+        log_path : str, optional
+            If set (LAMMPS backend), redirect LAMMPS ``log`` output to this file
+            for the duration of the minimize.
+        dump_every : int
+            Dump interval in force evaluations when ``dump_path`` is set.
+            Default 100 (avoid multi‑GB dumps / MPI I/O stalls from every-feval
+            dumping on large TBLG cells). Use 1 for a dense trajectory.
+        min_style : ``'cg'`` (default) or ``'fire'``
+            LAMMPS ``min_style`` for the ``lammps`` backend.
         """
         backend = _normalize_relax_backend(relax_backend)
+        style = str(min_style).strip().lower()
+        if backend == "lammps" and style not in ("fire", "cg"):
+            raise ValueError(
+                f"min_style must be 'fire' or 'cg', got {min_style!r}"
+            )
 
         if backend == "ase":
             out = atoms.copy()
@@ -598,13 +739,68 @@ class LammpsCalculatorBase:
             out.info["relax_backend"] = "ase"
             return out
 
-        # LAMMPS FIRE relaxation
+        # LAMMPS minimize (FIRE or CG)
         out = atoms.copy()
+        dump_id = "blg_relax_dump"
+        log_active = False
+        dump_active = False
+        dump_n = max(1, int(dump_every))
         try:
             self._setup_lammps(out)
             lmp = self._get_lmp()
-            lmp.command("min_style fire")
+
+            def _teardown_dump_log() -> None:
+                nonlocal dump_active, log_active
+                if dump_active:
+                    try:
+                        lmp.command(f"undump {dump_id}")
+                    except Exception:
+                        pass
+                    dump_active = False
+                if log_active:
+                    try:
+                        null_log = "/dev/null" if os.name != "nt" else "NUL"
+                        lmp.command(f"log {null_log}")
+                    except Exception:
+                        pass
+                    log_active = False
+
+            if log_path:
+                Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+                # Switch away from the constructor's /dev/null log.
+                lmp.command(f"log {log_path}")
+                log_active = True
+            if dump_path:
+                Path(dump_path).parent.mkdir(parents=True, exist_ok=True)
+                # Throttled dump: every-feval dumps on large TBLG cells create
+                # multi-GB files and hang on undump / NFS/Lustre flush under MPI.
+                # Omit dump_modify sort (global id sort stalls multi-rank I/O).
+                lmp.command(
+                    f"dump {dump_id} all custom {dump_n} {dump_path} "
+                    f"id type x y z fx fy fz"
+                )
+                dump_active = True
+            lmp.command(
+                "thermo_style custom step pe ke etotal press fmax fnorm"
+            )
+            # Match dump cadence so thermo/log stay small with dense minimizations.
+            lmp.command(f"thermo {dump_n if dump_path else 10}")
+            lmp.command(f"min_style {style}")
+            # norm max: ftol ≡ ASE fmax (max over atoms of ||F_i||), not the
+            # default global ||F||_2 of the 3N force vector.
+            if style == "fire":
+                # Cap FIRE timestep: default LAMMPS tmax is large enough to eject
+                # atoms from bilayer / POD relaxations (Lost atoms).
+                lmp.command(
+                    f"min_modify tmin {float(fire_tmin)} tmax {float(fire_tmax)} "
+                    f"norm max"
+                )
+            else:
+                lmp.command("min_modify norm max")
             lmp.command(f"minimize {etol} {ftol} {maxiter} {maxeval}")
+            # Close dump/log *before* run 0 so the post-min force eval does not
+            # append another (sorted) snapshot or prolong I/O teardown.
+            _teardown_dump_log()
             # A `run 0` after minimize ensures energy + forces are available.
             lmp.command("run 0")
             energy = float(lmp.get_thermo("pe"))
@@ -615,9 +811,29 @@ class LammpsCalculatorBase:
             )
         except Exception as exc:
             _reraise_relax_failed(
-                f"{type(self).__name__}.relax_structure (LAMMPS FIRE)",
+                f"{type(self).__name__}.relax_structure (LAMMPS {style.upper()})",
                 self, out, exc,
             )
+        finally:
+            # Always tear down dump/log so later calculate() stays silent.
+            try:
+                lmp = self._lmp
+                if lmp is not None and (dump_active or log_active):
+                    if dump_active:
+                        try:
+                            lmp.command(f"undump {dump_id}")
+                        except Exception:
+                            pass
+                        dump_active = False
+                    if log_active:
+                        try:
+                            null_log = "/dev/null" if os.name != "nt" else "NUL"
+                            lmp.command(f"log {null_log}")
+                        except Exception:
+                            pass
+                        log_active = False
+            except Exception:
+                pass
 
         out.set_positions(pos_ase)
         out.calc = self
@@ -625,6 +841,12 @@ class LammpsCalculatorBase:
         self._last_natoms = None
         _annotate_relax_energies(self, out, energy)
         out.info["relax_backend"] = "lammps"
+        out.info["lammps_min_style"] = style
+        if dump_path:
+            out.info["lammps_dump_path"] = str(dump_path)
+            out.info["lammps_dump_every"] = int(dump_n)
+        if log_path:
+            out.info["lammps_log_path"] = str(log_path)
         return out
 
 
@@ -1167,6 +1389,334 @@ class PODLammpsCalculator(LammpsCalculatorBase):
     def ncoeff(self) -> int:
         return len(self._params)
 
+    def compute_pod_descriptors(
+        self,
+        atoms_list=None,
+        *,
+        verbose: bool = False,
+    ) -> np.ndarray:
+        """Precompute global POD descriptors for a batch of structures.
+
+        POD is linear in the coefficients: ``E = c · D`` where
+        ``D_α = Σ_i D_{i,α}`` is the globally summed descriptor α.  Setting
+        ``c = e_k`` (unit vector) gives ``E = D_k``, so one ``evaluate_batch``
+        pass per descriptor index yields the full descriptor matrix.
+
+        Parameters
+        ----------
+        atoms_list : sequence of ase.Atoms, optional
+            Structures to describe.  Defaults to the list from the most recent
+            :meth:`prepare_batch` call.
+        verbose : bool
+            Print progress while extracting descriptors.
+
+        Returns
+        -------
+        descriptors : ndarray, shape ``(n_struct, n_desc)``
+        """
+        if atoms_list is None:
+            atoms_list = self._batch_atoms
+        if atoms_list is None:
+            raise RuntimeError(
+                "prepare_batch() must be called before compute_pod_descriptors() "
+                "when atoms_list is not supplied."
+            )
+
+        self.prepare_batch(atoms_list)
+        n_struct = len(atoms_list)
+        n_desc = self.ncoeff
+        descriptors = np.zeros((n_struct, n_desc), dtype=np.float64)
+
+        if verbose:
+            print(
+                f"[PODLammpsCalculator] Computing descriptors for {n_struct} "
+                f"structures, n_desc={n_desc}.",
+                flush=True,
+            )
+
+        for k in range(n_desc):
+            if verbose and (k % max(1, n_desc // 10) == 0 or k == n_desc - 1):
+                print(f"  POD descriptor {k + 1}/{n_desc} ...", flush=True)
+            c = np.zeros(n_desc, dtype=np.float64)
+            c[k] = 1.0
+            self.set_parameters(c)
+            energies, _ = self.evaluate_batch()
+            descriptors[:, k] = energies
+
+        self._batch_descriptors = descriptors
+        if verbose:
+            print("[PODLammpsCalculator] Descriptor precomputation done.", flush=True)
+        return descriptors
+
+    def compute_pod_atom_descriptors(
+        self,
+        atoms,
+        *,
+        compute_id: str = "pod_atom_desc",
+    ) -> np.ndarray:
+        """Per-atom POD descriptors for one structure via ``compute pod/atom``.
+
+        One LAMMPS evaluation returns the full descriptor matrix
+        ``D[i, α]`` for every atom *i* and descriptor *α*.
+
+        Parameters
+        ----------
+        atoms : ase.Atoms
+        compute_id : str
+            LAMMPS compute ID (uncomputed after extraction).
+
+        Returns
+        -------
+        descriptors : ndarray, shape ``(n_atoms, n_desc)``
+        """
+        self._setup_lammps(atoms)
+        lmp = self._get_lmp()
+        n_atoms = int(len(atoms))
+        n_desc = int(self.ncoeff)
+        pf = os.path.join(self._tmpdir, "pod_param.pod")
+        cf = os.path.join(self._tmpdir, "pod_coeff.pod")
+        elems = " ".join(self._elements)
+        try:
+            try:
+                lmp.command(f"uncompute {compute_id}")
+            except Exception:
+                pass
+            lmp.command(f"compute {compute_id} all pod/atom {pf} {cf} {elems}")
+            lmp.command("run 0")
+            return _extract_compute_atom_array(
+                lmp, compute_id, n_atoms, n_cols=None,
+            )
+        finally:
+            try:
+                lmp.command(f"uncompute {compute_id}")
+            except Exception:
+                pass
+
+    def compute_pod_atom_descriptors_batch(
+        self,
+        atoms_list,
+        *,
+        verbose: bool = False,
+    ) -> np.ndarray:
+        """Stack per-atom POD descriptors over a list of structures.
+
+        Returns
+        -------
+        descriptors : ndarray, shape ``(Σ n_atoms, n_desc)``
+        """
+        if not atoms_list:
+            return np.empty((0, int(self.ncoeff)), dtype=np.float64)
+
+        chunks = []
+        n_struct = len(atoms_list)
+        if verbose:
+            print(
+                f"[PODLammpsCalculator] Computing per-atom descriptors for "
+                f"{n_struct} structures, n_desc={self.ncoeff}.",
+                flush=True,
+            )
+        for i, atoms in enumerate(atoms_list):
+            if verbose and (i % max(1, n_struct // 10) == 0 or i == n_struct - 1):
+                print(
+                    f"  structure {i + 1}/{n_struct}  N={len(atoms)}",
+                    flush=True,
+                )
+            chunks.append(self.compute_pod_atom_descriptors(atoms))
+        out = np.vstack(chunks)
+        if verbose:
+            print(
+                f"[PODLammpsCalculator] Per-atom descriptor matrix {out.shape}.",
+                flush=True,
+            )
+        return out
+
+    @staticmethod
+    def energy_from_descriptors(params, descriptors) -> np.ndarray:
+        """Total potential energy from precomputed descriptors and coefficients.
+
+        For each structure ``s``, ``E[s] = Σ_α params[α] * descriptors[s, α]``.
+        This matches :meth:`get_potential_energy` / :meth:`evaluate_batch` for
+        the same parameters when ``descriptors`` were built with
+        :meth:`compute_pod_descriptors`.
+
+        Parameters
+        ----------
+        params : array-like, shape ``(n_desc,)``
+        descriptors : array-like
+            Shape ``(n_desc,)`` for one structure or ``(n_struct, n_desc)`` for a
+            batch.
+
+        Returns
+        -------
+        float or ndarray
+            Scalar energy for a 1-D descriptor vector; 1-D array of energies
+            for a batch matrix.
+        """
+        p = np.asarray(params, dtype=np.float64).ravel()
+        D = np.asarray(descriptors, dtype=np.float64)
+        if D.ndim == 1:
+            if p.shape[0] != D.shape[0]:
+                raise ValueError(
+                    f"params length {p.shape[0]} != descriptor length {D.shape[0]}"
+                )
+            return float(np.dot(p, D))
+        if D.ndim == 2:
+            if p.shape[0] != D.shape[1]:
+                raise ValueError(
+                    f"params length {p.shape[0]} != n_desc {D.shape[1]}"
+                )
+            return D @ p
+        raise ValueError(
+            f"descriptors must be 1-D or 2-D, got shape {D.shape}"
+        )
+
+
+class PODD3LammpsCalculator(PODLammpsCalculator):
+    """POD potential with DFT-D3 dispersion correction via ``hybrid/overlay``.
+
+    Energy decomposition::
+
+        E_total = E_POD(params) + E_D3
+
+    where ``E_D3`` is the DFT-D3 dispersion energy computed by LAMMPS
+    ``pair_style dispersion/d3``.  The D3 parameters are fixed (``zerom``
+    damping — not ``zero``, which conflicts with the ``zero`` spacer pair
+    style in ``hybrid/overlay`` — ``pbe`` functional, 30 Å cutoff,
+    20 Å CN cutoff); only the POD linear coefficients are optimised.
+
+    LAMMPS pair style::
+
+        pair_style hybrid/overlay pod dispersion/d3 zerom pbe 30.0 20.0
+        pair_coeff * * pod pod_param.pod pod_coeff.pod C
+        pair_coeff * * dispersion/d3 C
+
+    Fitting workflow
+    ----------------
+    Because D3 is a fixed correction, fit the POD coefficients to the
+    **D3-corrected** reference energies / forces::
+
+        E_DFT_corr = E_DFT - E_D3
+        F_DFT_corr = F_DFT - F_D3
+
+    Use :meth:`compute_d3_correction` to obtain ``(E_D3, F_D3)`` for any
+    batch of structures.  In :mod:`get_MCMC_inputs` the ``PODD3_energy``
+    branch does this automatically before fitting.
+
+    Parameters
+    ----------
+    hyperparams : dict
+        POD descriptor hyperparameters (same keys as ``PODLammpsCalculator``).
+    params : array-like
+        Initial POD linear coefficients (length = ``ncoeff_from_params(hyperparams)``).
+    elements : list[str], optional
+    cutoff : float, optional
+        POD descriptor cutoff in Å (default 5.0).
+    d3_damping : str, optional
+        D3 damping function keyword (default ``"zerom"``).  Do not use
+        ``"zero"`` with ``hybrid/overlay``: LAMMPS treats it as the spacer
+        ``zero`` pair style, not the D3 damping type.
+    d3_functional : str, optional
+        XC functional for D3 scaling parameters (default ``"pbe"``).
+    d3_cutoff : float, optional
+        D3 pair energy cutoff in Å (default 30.0).  LAMMPS ``metal`` units.
+    d3_cn_cutoff : float, optional
+        D3 coordination-number cutoff in Å (default 20.0).
+    """
+
+    def __init__(
+        self,
+        hyperparams: Dict,
+        params,
+        elements: Optional[List[str]] = None,
+        cutoff: float = 5.0,
+        d3_damping: str = "zerom",
+        d3_functional: str = "pbe",
+        d3_cutoff: float = 30.0,
+        d3_cn_cutoff: float = 20.0,
+    ) -> None:
+        self._d3_damping    = str(d3_damping)
+        self._d3_functional = str(d3_functional)
+        self._d3_cutoff     = float(d3_cutoff)
+        self._d3_cn_cutoff  = float(d3_cn_cutoff)
+        super().__init__(hyperparams, params, elements=elements, cutoff=cutoff)
+
+    def _pair_style_commands(self, tmp_dir: str) -> List[str]:
+        pf    = os.path.join(tmp_dir, "pod_param.pod")
+        cf    = os.path.join(tmp_dir, "pod_coeff.pod")
+        elems = " ".join(self._elements)
+        return [
+            f"pair_style hybrid/overlay pod "
+            f"dispersion/d3 {self._d3_damping} {self._d3_functional} "
+            f"{self._d3_cutoff} {self._d3_cn_cutoff}",
+            f"pair_coeff * * pod {pf} {cf} {elems}",
+            f"pair_coeff * * dispersion/d3 {elems}",
+        ]
+
+    def _neigh_modify_command(self) -> str:
+        # D3 uses a ~30 Å cutoff; hybrid/overlay needs a larger per-atom
+        # neighbor list than the default (~2000) for typical BLG supercells.
+        return "neigh_modify delay 0 every 1 check yes one 10000 page 2000000"
+
+    def compute_d3_correction(
+        self,
+        atoms_list=None,
+    ) -> Tuple[np.ndarray, List[Optional[np.ndarray]]]:
+        """Compute the D3-only energies and forces by zeroing all POD coefficients.
+
+        The POD coefficients are temporarily set to zero so that LAMMPS
+        evaluates only the dispersion/d3 pair style.  The original
+        coefficients are restored after the batch run.
+
+        Parameters
+        ----------
+        atoms_list : list of ase.Atoms, optional
+            Structures to evaluate.  Defaults to the batch from the most
+            recent :meth:`prepare_batch` call.
+
+        Returns
+        -------
+        d3_energies : ndarray, shape (n_struct,)
+        d3_forces   : list of ndarray, each (n_atoms, 3)
+        """
+        if atoms_list is None:
+            atoms_list = self._batch_atoms
+        if atoms_list is None:
+            raise RuntimeError(
+                "prepare_batch() must be called before compute_d3_correction() "
+                "when atoms_list is not supplied."
+            )
+
+        saved_params = self._params.copy()
+        zero_params  = np.zeros_like(self._params)
+        try:
+            self.set_parameters(zero_params)
+            self.prepare_batch(atoms_list)
+            d3_energies, d3_forces = self.evaluate_batch(atoms_list)
+        finally:
+            self.set_parameters(saved_params)
+            # Re-prepare so the batch state reflects the original coefficients.
+            self.prepare_batch(atoms_list)
+
+        d3_energies = np.asarray(d3_energies, dtype=np.float64)
+        n_finite = int(np.isfinite(d3_energies).sum())
+        if n_finite == 0:
+            raise RuntimeError(
+                "PODD3LammpsCalculator: D3 correction evaluation failed for all "
+                f"{d3_energies.size} structures (all energies are NaN).  "
+                "Common causes: LAMMPS built without EXTRA-PAIR (rebuild with "
+                "PKG_EXTRA-PAIR=yes), D3 damping keyword ``zero`` in "
+                "hybrid/overlay (use ``zerom``, ``bj``, or ``bjm`` instead), "
+                "or neighbor-list overflow (increase ``neigh_modify one``)."
+            )
+        if n_finite < d3_energies.size:
+            print(
+                f"[PODD3LammpsCalculator] Warning: D3 correction finite for only "
+                f"{n_finite}/{d3_energies.size} structures.",
+                flush=True,
+            )
+
+        return d3_energies, d3_forces
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  TETB-POD helpers — tight-binding math
@@ -1518,11 +2068,13 @@ def tetb_auto_select_kmesh(atoms) -> Tuple[int, int, int]:
 
     Same empirical rule as ``BLG_model_builder.TETB_model_builder.TETB_model.
     auto_select_kpoints`` (converged k-density for a 1×1 bilayer graphene cell,
-    scaled to larger in-plane supercells via 2.46 Å reference lengths).
+    scaled to larger in-plane supercells via the equilibrium BLG lattice constant).
     """
+    from blg_model_builder.strain_data import LAT_CON
+
     cell = atoms.get_cell()
-    cell_length_1 = 2.46
-    cell_length_2 = 2.46
+    cell_length_1 = LAT_CON
+    cell_length_2 = LAT_CON
     ncellsx = float(np.ceil(np.round(np.linalg.norm(cell[0, :]) / cell_length_1)))
     ncellsy = float(np.ceil(np.round(np.linalg.norm(cell[1, :]) / cell_length_2)))
     if ncellsx <= 0.0:

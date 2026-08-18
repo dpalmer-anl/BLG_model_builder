@@ -79,7 +79,7 @@ def main() -> None:
     parser.add_argument("--level-of-theory", type=str, default="rVV10",
                         dest="level_of_theory")
     parser.add_argument("--POD-index", type=int, default=None, dest="pod_index",
-                        help="Select a POD descriptor by index into use_pod_models_hash.txt.")
+                        help="Select a POD descriptor by row index in the tightened search CSV.")
     parser.add_argument("--allegro-checkpoint", type=str, default=None,
                         dest="allegro_checkpoint",
                         help="Path to a trained Allegro .ckpt (for Allegro_energy).")

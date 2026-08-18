@@ -133,6 +133,7 @@ python smoke_test_models.py
 - `PKG_INTERLAYER` — KC full, DRIP
 - `PKG_ML-POD` — POD potentials
 - `PKG_MOLECULE` — layer tags for interlayer models
+- `EXTRA-PAIR` for D3 correction
 
 ---
 

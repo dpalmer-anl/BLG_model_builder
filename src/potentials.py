@@ -38,6 +38,8 @@ Backward-compatible aliases (same names as the old C++ wrapper classes):
 
 Relaxation helper (patched onto ase.Atoms):
   - Atoms.relax_structure()         delegates to ``calc.relax_structure()``
+  - ase_fmax_to_lammps_ftol(fmax)   ASE FIRE fmax → LAMMPS minimize ftol
+                                    (identity when using ``min_modify norm max``)
 """
 
 from __future__ import annotations
@@ -332,10 +334,28 @@ _FIRE_RELAX_DEFAULT_FTOL = 1e-5
 _FIRE_RELAX_DEFAULT_MAXITER = 1000
 _FIRE_RELAX_DEFAULT_MAXEVAL = 10000
 
-_ASE_FIRE_DT = 0.1
-_ASE_FIRE_MAXSTEP = 0.1
-_ASE_FIRE_DTMAX = 1.0
+# LAMMPS ``min_style fire`` adaptive timestep caps (metal units).
+# The default ``tmax`` (~10) takes steps large enough to lose atoms on TBLG with
+# POD / classical interlayer models; keep these conservative (Å-scale steps).
+_LAMMPS_FIRE_TMIN = 0.0005
+_LAMMPS_FIRE_TMAX = 0.01
+
+# ASE FIRE defaults — small maxstep required for POD TBLG stability.
+_ASE_FIRE_DT = 0.05
+_ASE_FIRE_MAXSTEP = 0.01
+_ASE_FIRE_DTMAX = 0.01
 _ASE_FIRE_DOWNHILL_CHECK = False
+
+
+def ase_fmax_to_lammps_ftol(fmax: float) -> float:
+    """Map ASE FIRE ``fmax`` to LAMMPS ``minimize`` ``ftol``.
+
+    ASE stops when every atom satisfies ``||F_i|| ≤ fmax``.  Our LAMMPS relax
+    path sets ``min_modify norm max``, so the same numeric value is used as
+    LAMMPS ``ftol``.  (Without ``norm max``, LAMMPS would interpret ``ftol`` as
+    the Euclidean norm of the full 3N force vector — not equivalent.)
+    """
+    return float(fmax)
 
 
 def _geometry_changed(atoms, last_pos, last_cell) -> bool:
@@ -450,7 +470,7 @@ def _relax_structure_ase(
     from ase.optimize import FIRE  # noqa: PLC0415
 
     kw: Dict[str, Any] = dict(
-        logfile="log",
+        logfile=None,
         dt=_ASE_FIRE_DT,
         maxstep=_ASE_FIRE_MAXSTEP,
         dtmax=_ASE_FIRE_DTMAX,
@@ -491,6 +511,7 @@ from blg_model_builder.lammps_interface import (  # noqa: E402
     TersoffKCLammpsCalculator,
     TersoffDRIPLammpsCalculator,
     PODLammpsCalculator,
+    PODD3LammpsCalculator,
     TETB_PODLammpsCalculator,
     _write_tersoff_file,
     _write_kc_file,

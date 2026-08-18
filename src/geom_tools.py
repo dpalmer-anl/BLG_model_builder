@@ -6,6 +6,8 @@ import pandas as pd
 import ase
 import matplotlib.pyplot as plt
 
+from blg_model_builder.strain_data import LAT_CON
+
 def get_monolayer_atoms(dx,dy,a=2.462,sc=4):
     atoms=fg.shift.make_layer("A","rect",sc,sc,a,7.0,"B",12.01,1)
     curr_cell=atoms.get_cell()
@@ -47,7 +49,7 @@ def get_lattice_vectors(a, c):
         [0, 0, c]
         ]
 
-def get_bilayer_atoms(d,disregistry, a=2.46, c=20, sc=1,zshift='CM'):
+def get_bilayer_atoms(d,disregistry, a=LAT_CON, c=20, sc=1,zshift='CM'):
     '''All units should be in angstroms'''
     symbols = ["C","C","C","C"]
     atoms = ase.Atoms(
@@ -62,7 +64,7 @@ def get_bilayer_atoms(d,disregistry, a=2.46, c=20, sc=1,zshift='CM'):
     return atoms
 
 
-def get_aa_bilayer_atoms(d, a=2.46, c=20, sc=1, zshift="CM"):
+def get_aa_bilayer_atoms(d, a=LAT_CON, c=20, sc=1, zshift="CM"):
     """Primitive AA-stacked bilayer graphene (same ``(x,y)`` in both layers).
 
     Unlike :func:`get_bilayer_atoms` with ``disregistry != 0``, AA here means each

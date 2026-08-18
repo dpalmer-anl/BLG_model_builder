@@ -12,7 +12,7 @@ TEST_FRACTION = 0.2      # fraction of the selected subset used for testing
 RANDOM_SEED   = 42
 
 # ── POD descriptor hyperparameters ────────────────────────────────────────────
-# Hash 09fdb1c2b98eb30e — index 0 from use_pod_models_hash.txt
+# POD hash selected from pod_hyperparam_search.csv.
 # ncoeff = 53, test RMSE = 0.00268 eV/atom (best model in the hyperparameter search)
 POD_HASH     = "09fdb1c2b98eb30e"
 POD_CUTOFF   = 6.0
