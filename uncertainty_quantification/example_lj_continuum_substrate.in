@@ -1,0 +1,44 @@
+clear
+units           metal
+atom_style      atomic
+atom_modify     map yes
+box             tilt large
+processors      * * 1
+boundary        p p p
+read_data      TBG.data
+mass            1 12.0107
+pair_style      kim hNN_WenTadmor_2019Grx_C__MO_421038499185_001
+pair_coeff      * * C
+thermo          100
+neigh_modify    every 1 delay 0 check yes
+thermo_style    custom step etotal fmax fnorm pxx pyy pxy
+thermo_modify   format line "%d %18.17e %18.17e %18.17e %18.17e %18.17e %18.17e"
+
+#write_data      ref_hNN.data
+# Dump energy per atom
+#dump myDump all custom 1000 dump_hNN.atom id type x y z c_perAtomPE
+
+# LJ parameters (C-N)
+variable        sh1 equal 0.0 # Height of substrate
+variable        epsN1 equal 0.0415 # Energy parameter (eV) QMC Binding energy of AB graphene-hbn
+variable        sigN1 equal 2.9845 # Distance parameter parameter (Angstrom) QMC interlayer separation / 2^(1/6) of AB graphene-hbn 3.35/(2^(1/6))
+variable        qN1 equal 0.077495 # Number density of nitrogen atom (Num/Angstrom^3)
+variable        EaddN1 atom (4/3*PI*${epsN1}*(${sigN1})^3*${qN1}*(1/15*((z-${sh1})/${sigN1})^(-9)-1/2*((z-${sh1})/${sigN1})^(-3)))
+variable        faddN1 atom (-4/3*PI*${epsN1}*(${sigN1})^3*${qN1}*(-9/15*1/${sigN1}*((z-${sh1})/${sigN1})^(-10)+3/2*1/${sigN1}*((z-${sh1})/${sigN1})^(-4)))
+fix             addECN1 all addforce 0.0 0.0 v_faddN1 energy v_EaddN1
+fix_modify      addECN1 energy yes # This allow LAMMPS add EaddN into the total energy
+
+variable        sh2 equal 0.0 # Height of substrate
+variable        epsB equal 0.0415 # Energy parameter for C-B (eV)
+variable        sigB equal 2.9845 # Distance parameter parameter C-B (Angstrom)
+variable        qNB equal 0.077495 # Number density of Boron atom (Num/Angstrom^3)
+variable        EaddB atom (4/3*PI*${epsB}*(${sigB})^3*${qNB}*(1/15*((z-${sh2})/${sigB})^(-9)-1/2*((z-${sh2})/${sigB})^(-3)))
+variable        faddB atom (-4/3*PI*${epsB}*(${sigB})^3*${qNB}*(-9/15*1/${sigB}*((z-${sh2})/${sigB})^(-10)+3/2*1/${sigB}*((z-${sh2})/${sigB})^(-4)))
+fix             addECB all addforce 0.0 0.0 v_faddB energy v_EaddB
+fix_modify      addECB energy yes # This allow LAMMPS add EaddN into the total energy
+
+min_style       fire
+min_modify      integrator verlet tmax 1.0 tmin 0.0
+minimize        0.0 1e-8 20000 20000
+
+write_data      relaxed.data

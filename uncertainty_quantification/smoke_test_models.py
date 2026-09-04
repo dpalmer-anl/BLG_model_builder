@@ -31,6 +31,8 @@ ENERGY_MODELS = [
 
 OPTIONAL_ENERGY_MODELS = [
     ("Allegro_energy", {"allegro_device": "cpu"}),
+    ("POD+extep+ILP", {}),
+    ("POD+LJ_continuum", {}),
 ]
 
 TB_MODELS = [

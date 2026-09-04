@@ -512,6 +512,8 @@ from blg_model_builder.lammps_interface import (  # noqa: E402
     TersoffDRIPLammpsCalculator,
     PODLammpsCalculator,
     PODD3LammpsCalculator,
+    PODExtepILPLammpsCalculator,
+    PODLJContinuumSubstrateLammpsCalculator,
     TETB_PODLammpsCalculator,
     _write_tersoff_file,
     _write_kc_file,
@@ -529,6 +531,8 @@ TersoffKolmogorovCrespiASECalculator = TersoffKCLammpsCalculator
 TersoffDRIPASECalculator             = TersoffDRIPLammpsCalculator
 PODASECalculator                     = PODLammpsCalculator
 TETB_PODASECalculator                = TETB_PODLammpsCalculator
+PODExtepILPASECalculator             = PODExtepILPLammpsCalculator
+PODLJContinuumSubstrateASECalculator = PODLJContinuumSubstrateLammpsCalculator
 
 _LAMMPS_PY_INTERFACE_AVAILABLE = True  # always True; _ext path has been removed
 

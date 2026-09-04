@@ -1,0 +1,87 @@
+{
+  "budget": 2000,
+  "mlp_tracks_ns": [
+    {
+      "num_scalar_features": 2,
+      "max_num_tensor_features": 141,
+      "n_params_at_max": 1988
+    },
+    {
+      "num_scalar_features": 4,
+      "max_num_tensor_features": 62,
+      "n_params_at_max": 1996
+    },
+    {
+      "num_scalar_features": 6,
+      "max_num_tensor_features": 30,
+      "n_params_at_max": 1968
+    },
+    {
+      "num_scalar_features": 8,
+      "max_num_tensor_features": 13,
+      "n_params_at_max": 1970
+    },
+    {
+      "num_scalar_features": 10,
+      "max_num_tensor_features": 2,
+      "n_params_at_max": 1984
+    },
+    {
+      "num_scalar_features": 12,
+      "max_num_tensor_features": null,
+      "n_params_at_max": null
+    },
+    {
+      "num_scalar_features": 14,
+      "max_num_tensor_features": null,
+      "n_params_at_max": null
+    },
+    {
+      "num_scalar_features": 16,
+      "max_num_tensor_features": null,
+      "n_params_at_max": null
+    }
+  ],
+  "mlp_width_fixed_4": [
+    {
+      "num_scalar_features": 2,
+      "max_num_tensor_features": 120,
+      "n_params_at_max": 1994
+    },
+    {
+      "num_scalar_features": 4,
+      "max_num_tensor_features": 62,
+      "n_params_at_max": 1996
+    },
+    {
+      "num_scalar_features": 6,
+      "max_num_tensor_features": 34,
+      "n_params_at_max": 1978
+    },
+    {
+      "num_scalar_features": 8,
+      "max_num_tensor_features": 18,
+      "n_params_at_max": 1976
+    },
+    {
+      "num_scalar_features": 10,
+      "max_num_tensor_features": 7,
+      "n_params_at_max": 1956
+    },
+    {
+      "num_scalar_features": 12,
+      "max_num_tensor_features": null,
+      "n_params_at_max": null
+    },
+    {
+      "num_scalar_features": 14,
+      "max_num_tensor_features": null,
+      "n_params_at_max": null
+    },
+    {
+      "num_scalar_features": 16,
+      "max_num_tensor_features": null,
+      "n_params_at_max": null
+    }
+  ]
+}

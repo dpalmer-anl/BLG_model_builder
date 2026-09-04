@@ -134,6 +134,13 @@ _POD_TWO_BODY_RADIAL_GRID = list(range(6, 14, 1))
 _POD_THREE_BODY_RADIAL_GRID = (4, 6, 8, 10)
 _POD_THREE_BODY_ANGULAR_GRID = (4, 6, 8)
 
+# Shared layout for POD_energy and ACSF_hoppings* hyperparameter metric plots.
+_HYPERPARAM_FIGSIZE = (14.0, 8.5)
+_HYPERPARAM_LEGEND_BBOX = (1.02, 0.5)
+_HYPERPARAM_LAYOUT_RECT = (0.0, 0.0, 0.84, 1.0)
+_HYPERPARAM_SAVE_PAD_INCHES = 0.15
+_HYPERPARAM_ERRORBAR_KW = dict(fmt="o-", lw=1.8, markersize=6, capsize=3)
+
 # -----------------------------------------------------------------------------
 # Core metrics (NumPy)
 # -----------------------------------------------------------------------------
@@ -2261,6 +2268,69 @@ def collect_nll_hyperparam_records(
     return collect_hyperparam_calibration_records(entries)
 
 
+def _style_hyperparam_axes(
+    ax,
+    fig,
+    *,
+    xlabel: str,
+    ylabel: str,
+    log_y: bool = False,
+    show_title: bool = False,
+    legend_outside: bool = True,
+    title: str = "",
+    xticks: Optional[Sequence[float]] = None,
+    xlim: Optional[Tuple[float, float]] = None,
+) -> None:
+    """Apply shared axis styling for POD / ACSF hyperparameter metric plots."""
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    if xticks is not None:
+        ax.set_xticks(list(xticks))
+    if xlim is not None:
+        ax.set_xlim(*xlim)
+    if show_title and title:
+        ax.set_title(title)
+    if log_y:
+        all_y = np.concatenate(
+            [np.asarray(line.get_ydata(), dtype=float) for line in ax.lines],
+        ) if ax.lines else np.array([], dtype=float)
+        if np.any(all_y > 0):
+            ax.set_yscale("log")
+    ax.grid(True, alpha=0.3)
+    if legend_outside:
+        ax.legend(
+            bbox_to_anchor=_HYPERPARAM_LEGEND_BBOX,
+            loc="center left",
+            frameon=False,
+        )
+        fig.tight_layout(rect=_HYPERPARAM_LAYOUT_RECT)
+    else:
+        ax.legend(loc="best")
+        fig.tight_layout()
+
+
+def _save_hyperparam_figure(
+    fig,
+    out: str,
+    *,
+    dpi: int,
+    n_records: int,
+    n_groups: int,
+) -> None:
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    fig.savefig(
+        out,
+        dpi=dpi,
+        bbox_inches="tight",
+        pad_inches=_HYPERPARAM_SAVE_PAD_INCHES,
+    )
+    plt.close(fig)
+    print(
+        f"Wrote {out}  ({n_records} models, {n_groups} grid group(s))",
+        flush=True,
+    )
+
+
 def _plot_pod_metric_vs_two_body_radial(
     pod_records: Sequence[Dict[str, Any]],
     figures_dir: str,
@@ -2273,8 +2343,8 @@ def _plot_pod_metric_vs_two_body_radial(
     filename_suffix: str,
     log_y: bool = False,
     dpi: int = 150,
-    show_title: bool = True,
-    legend_outside: bool = False,
+    show_title: bool = False,
+    legend_outside: bool = True,
 ) -> Optional[str]:
     """Metric vs 2-body radial basis count, grouped by 3-body radial / angular."""
     if not pod_records:
@@ -2295,8 +2365,7 @@ def _plot_pod_metric_vs_two_body_radial(
             flush=True,
         )
 
-    fig_w = 14.0
-    fig_h = 8.5
+    fig_w, fig_h = _HYPERPARAM_FIGSIZE
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
     for (n3r, n3a) in sorted(groups):
         pts = sorted(groups[(n3r, n3a)], key=lambda r: int(r["two_body_radial"]))
@@ -2318,48 +2387,42 @@ def _plot_pod_metric_vs_two_body_radial(
             x,
             y,
             yerr=yerr,
-            fmt="o-",
-            lw=1.8,
-            markersize=6,
-            capsize=3,
             label=rf"$N_{{\mathrm{{3b}}}}={int(n3r) * int(n3a)}$",
+            **_HYPERPARAM_ERRORBAR_KW,
         )
 
-    ax.set_xticks(list(_POD_TWO_BODY_RADIAL_GRID))
-    ax.set_xlim(min(_POD_TWO_BODY_RADIAL_GRID) - 0.5, max(_POD_TWO_BODY_RADIAL_GRID) + 0.5)
     tech_label = _SAMPLING_LABEL.get(technique, technique)
-    ax.set_xlabel(r"$n_{\mathrm{rad}}$ (2-body radial basis functions)")
-    ax.set_ylabel(ylabel)
-    if show_title:
-        ax.set_title(
-            f"{family_label} — {plot_target}\n"
-            f"{ylabel} at best-calibration {tech_label} vs 2-body radial count"
-        )
-    if log_y:
-        all_y = np.concatenate(
-            [np.asarray(line.get_ydata(), dtype=float) for line in ax.lines],
-        ) if ax.lines else np.array([], dtype=float)
-        if np.any(all_y > 0):
-            ax.set_yscale("log")
-    ax.grid(True, alpha=0.3)
-    if legend_outside:
-        ax.legend(bbox_to_anchor=(1.02, 0.5), loc="center left", frameon=False)
-        fig.tight_layout(rect=(0.0, 0.0, 0.84, 1.0))
-    else:
-        ax.legend(loc="best")
-        fig.tight_layout()
+    title = (
+        f"{family_label} — {plot_target}\n"
+        f"{ylabel} at best-calibration {tech_label} vs 2-body radial count"
+    )
+    _style_hyperparam_axes(
+        ax,
+        fig,
+        xlabel=r"$n_{\mathrm{rad}}$ (2-body radial basis functions)",
+        ylabel=ylabel,
+        log_y=log_y,
+        show_title=show_title,
+        legend_outside=legend_outside,
+        title=title,
+        xticks=_POD_TWO_BODY_RADIAL_GRID,
+        xlim=(
+            min(_POD_TWO_BODY_RADIAL_GRID) - 0.5,
+            max(_POD_TWO_BODY_RADIAL_GRID) + 0.5,
+        ),
+    )
 
-    os.makedirs(figures_dir, exist_ok=True)
     tech_slug = re.sub(r"[^\w]+", "_", technique)
     out = os.path.join(
         figures_dir,
         f"{_safe_filename_slug(family_label)}_{filename_suffix}_{plot_target}_{tech_slug}.png",
     )
-    fig.savefig(out, dpi=dpi, bbox_inches="tight", pad_inches=0.15)
-    plt.close(fig)
-    print(
-        f"Wrote {out}  ({len(pod_records)} models, {len(groups)} grid group(s))",
-        flush=True,
+    _save_hyperparam_figure(
+        fig,
+        out,
+        dpi=dpi,
+        n_records=len(pod_records),
+        n_groups=len(groups),
     )
     return out
 
@@ -2376,8 +2439,8 @@ def _plot_acsf_metric_vs_M(
     filename_suffix: str,
     log_y: bool = False,
     dpi: int = 150,
-    show_title: bool = True,
-    legend_outside: bool = False,
+    show_title: bool = False,
+    legend_outside: bool = True,
 ) -> Optional[str]:
     """Metric vs ``M`` for ACSF hopping models, grouped by fixed ``W``."""
     if not acsf_records:
@@ -2387,7 +2450,8 @@ def _plot_acsf_metric_vs_M(
     for rec in acsf_records:
         groups.setdefault(int(rec["W"]), []).append(rec)
 
-    fig, ax = plt.subplots(figsize=(8.0, 5.0))
+    fig_w, fig_h = _HYPERPARAM_FIGSIZE
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
     for w_val in sorted(groups):
         pts = sorted(groups[w_val], key=lambda r: int(r["M"]))
         x = np.array([int(p["M"]) for p in pts], dtype=float)
@@ -2400,43 +2464,45 @@ def _plot_acsf_metric_vs_M(
             x,
             y,
             yerr=yerr,
-            fmt="o-",
-            lw=1.8,
-            markersize=6,
-            capsize=3,
             label=rf"$W={w_val}$",
+            **_HYPERPARAM_ERRORBAR_KW,
         )
+
+    m_grid = sorted({int(r["M"]) for r in acsf_records})
+    m_xlim = None
+    if m_grid:
+        m_xlim = (min(m_grid) - 0.5, max(m_grid) + 0.5)
 
     tech_label = _SAMPLING_LABEL.get(technique, technique)
-    ax.set_xlabel(r"$M$ (radial basis functions)")
-    ax.set_ylabel(ylabel)
-    if show_title:
-        ax.set_title(
-            f"{family_label} — {plot_target}\n"
-            f"{ylabel} at best-calibration {tech_label} vs $M$"
-        )
-    if log_y:
-        all_y = np.concatenate(
-            [np.asarray(line.get_ydata(), dtype=float) for line in ax.lines],
-        )
-        if np.any(all_y > 0):
-            ax.set_yscale("log")
-    if legend_outside:
-        ax.legend(bbox_to_anchor=(1.05, 0.5), loc="center left")
-    else:
-        ax.legend(loc="best")
-    ax.grid(True, alpha=0.3)
-    fig.tight_layout()
+    title = (
+        f"{family_label} — {plot_target}\n"
+        f"{ylabel} at best-calibration {tech_label} vs $M$"
+    )
+    _style_hyperparam_axes(
+        ax,
+        fig,
+        xlabel=r"$M$ (radial basis functions)",
+        ylabel=ylabel,
+        log_y=log_y,
+        show_title=show_title,
+        legend_outside=legend_outside,
+        title=title,
+        xticks=m_grid or None,
+        xlim=m_xlim,
+    )
 
-    os.makedirs(figures_dir, exist_ok=True)
     tech_slug = re.sub(r"[^\w]+", "_", technique)
     out = os.path.join(
         figures_dir,
         f"{_safe_filename_slug(family_label)}_{filename_suffix}_{plot_target}_{tech_slug}.png",
     )
-    fig.savefig(out, dpi=dpi, bbox_inches="tight")
-    plt.close(fig)
-    print(f"Wrote {out}")
+    _save_hyperparam_figure(
+        fig,
+        out,
+        dpi=dpi,
+        n_records=len(acsf_records),
+        n_groups=len(groups),
+    )
     return out
 
 
@@ -2461,8 +2527,6 @@ def plot_pod_nll_vs_two_body_radial(
         filename_suffix="nll_vs_two_body_radial",
         log_y=False,
         dpi=dpi,
-        show_title=False,
-        legend_outside=True,
     )
 
 
@@ -2511,8 +2575,6 @@ def plot_acsf_nll_vs_M(
         filename_suffix="nll_vs_M",
         log_y=False,
         dpi=dpi,
-        show_title=False,
-        legend_outside=True,
     )
 
 

@@ -91,6 +91,8 @@ from uq_model_runtime import (
     build_uq_calculator,
     is_uq_energy_model,
     is_uq_python_model,
+    pod_ensemble_name_for_extep_ilp,
+    pod_ensemble_name_for_lj_continuum,
 )
 from blg_model_builder.pod_model_selection import (
     pod_energy_ensemble_names_from_csv,
@@ -1266,6 +1268,30 @@ def main() -> None:
     p.add_argument("--lat-con", type=float, default=DEFAULT_LAT_CON)
     p.add_argument("--initial-sep", type=float, default=DEFAULT_INITIAL_SEP)
     p.add_argument(
+        "--with-hbn",
+        action="store_true",
+        help=(
+            "Relax TBLG on a monolayer hBN substrate (POD+extep+ILP). "
+            "Uses the stored stacking registry and lattice constant from "
+            "tblg_hbn_geometry.py (from analyze_tblg_hbn_stacking_lattice.py). "
+            "MCMC ensemble draws vary POD coefficients only; ExTeP and ILP "
+            "potentials are fixed. Relaxation uses ASE (not LAMMPS minimize) "
+            "so POD is evaluated on carbon atoms only."
+        ),
+    )
+    p.add_argument(
+        "--with-lj-substrate",
+        action="store_true",
+        help=(
+            "Relax TBLG above a fixed continuum LJ hBN bulk substrate "
+            "(POD+LJ_continuum). POD handles C–C; continuum LJ 9–3 "
+            "(ε,σ fitted to E_bind=0.0415 eV/atom, z_eq=3.35 Å, "
+            "q=0.077495 Å^-3 for hBN) is applied via LAMMPS addforce. "
+            "Ensemble draws vary POD coefficients only. "
+            "Mutually exclusive with --with-hbn."
+        ),
+    )
+    p.add_argument(
         "--relax-backend",
         choices=("lammps", "ase"),
         default=DEFAULT_RELAX_BACKEND,
@@ -1355,17 +1381,92 @@ def main() -> None:
                 flush=True,
             )
 
-    if is_root:
-        print(
-            f"\nBuilding TBLG at θ={args.twist_angle:g}° "
-            f"(lat_con={args.lat_con:g} Å, sep={args.initial_sep:g} Å) …",
-            flush=True,
+    if args.with_hbn and args.with_lj_substrate:
+        p.error("--with-hbn and --with-lj-substrate are mutually exclusive.")
+
+    if args.with_hbn:
+        # Substrate requires the hybrid BN potential.
+        remapped = []
+        for name in models:
+            if not str(name).startswith("POD+extep+ILP"):
+                if is_root:
+                    print(
+                        f"  Remapping {name!r} → 'POD+extep+ILP' for --with-hbn "
+                        f"(BN ExTeP + ILP required).",
+                        flush=True,
+                    )
+                remapped.append("POD+extep+ILP")
+            else:
+                remapped.append(name)
+        models = remapped
+
+        from tblg_hbn_geometry import (  # noqa: PLC0415
+            HBN_STACKING_FRAC,
+            HBN_TBLG_LAT_CON,
+            build_tblg_on_hbn,
         )
-    tblg_template = build_tblg_atoms(
-        args.twist_angle,
-        lat_con=args.lat_con,
-        sep=args.initial_sep,
-    )
+        lat_use = (
+            float(args.lat_con)
+            if abs(float(args.lat_con) - float(DEFAULT_LAT_CON)) > 1e-12
+            else float(HBN_TBLG_LAT_CON)
+        )
+        if is_root:
+            print(
+                f"\nBuilding TBLG on hBN at θ={args.twist_angle:g}° "
+                f"(lat_con={lat_use:g} Å, stacking={HBN_STACKING_FRAC}) …",
+                flush=True,
+            )
+        tblg_template = build_tblg_on_hbn(
+            args.twist_angle,
+            lat_con=lat_use,
+            stacking_frac=HBN_STACKING_FRAC,
+            tblg_sep=args.initial_sep,
+        )
+    elif args.with_lj_substrate:
+        remapped = []
+        for name in models:
+            if not str(name).startswith("POD+LJ_continuum"):
+                if is_root:
+                    print(
+                        f"  Remapping {name!r} → 'POD+LJ_continuum' for "
+                        f"--with-lj-substrate.",
+                        flush=True,
+                    )
+                remapped.append("POD+LJ_continuum")
+            else:
+                remapped.append(name)
+        models = remapped
+
+        from blg_model_builder.lj_continuum_substrate import (  # noqa: PLC0415
+            LJ_SUBSTRATE_Z_EQ,
+            place_atoms_on_lj_substrate,
+        )
+
+        if is_root:
+            print(
+                f"\nBuilding TBLG on continuum LJ substrate at θ={args.twist_angle:g}° "
+                f"(lat_con={args.lat_con:g} Å, sep={args.initial_sep:g} Å, "
+                f"bottom layer @ z={LJ_SUBSTRATE_Z_EQ:g} Å) …",
+                flush=True,
+            )
+        tblg_template = build_tblg_atoms(
+            args.twist_angle,
+            lat_con=args.lat_con,
+            sep=args.initial_sep,
+        )
+        place_atoms_on_lj_substrate(tblg_template, z_eq=LJ_SUBSTRATE_Z_EQ)
+    else:
+        if is_root:
+            print(
+                f"\nBuilding TBLG at θ={args.twist_angle:g}° "
+                f"(lat_con={args.lat_con:g} Å, sep={args.initial_sep:g} Å) …",
+                flush=True,
+            )
+        tblg_template = build_tblg_atoms(
+            args.twist_angle,
+            lat_con=args.lat_con,
+            sep=args.initial_sep,
+        )
     if is_root:
         print(f"  n_atoms={len(tblg_template)}", flush=True)
 
@@ -1387,8 +1488,15 @@ def main() -> None:
             if is_root:
                 print("  Using relax_backend=ase for Python Allegro model.", flush=True)
 
+        # Hybrid POD wrappers reuse the underlying POD_energy MCMC ensemble.
+        if str(model_name).startswith("POD+extep+ILP"):
+            ensemble_model = pod_ensemble_name_for_extep_ilp(model_name)
+        elif str(model_name).startswith("POD+LJ_continuum"):
+            ensemble_model = pod_ensemble_name_for_lj_continuum(model_name)
+        else:
+            ensemble_model = model_name
         pkl_path, t_used = resolve_ensemble_pickle(
-            model_name,
+            ensemble_model,
             args.ensemble_dir,
             args.temperature,
             calibration_metrics_dir=args.calibration_metrics_dir,

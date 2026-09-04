@@ -18,6 +18,16 @@ For each selected LAMMPS model (``--models``) and twist angle
    ``np.linalg.eigh``.
 5. Save eigenvalues and k-path metadata to an ``.npz`` file per sample.
 
+Optional modes (see CLI)::
+
+    --mean-structure   MIC-average last frames of all trajs; loop TB ensemble
+    --mean-tb          mean hopping-parameter vector for every structure
+    --k-mesh NX NY NZ  Gamma-centered mesh instead of K–Γ–M–K
+    --arpes-ky-path    ARPES line scan: ky = 1.5–1.65 Å⁻¹ (15 pts), kx = kz = 0
+                       (Cartesian k, not fractional BZ); saves |E−E_F| ≤ 2 eV
+    --save-eigenvectors  also store evecs for the Fermi-window bands
+                       (25 below / 25 above E_F), compressed ``.npz``
+
 Supported model patterns for ``--models``:
     POD_energy*, TETB_POD*, Tersoff+DRIP, Tersoff+Kolmogorov_Crespi
 
@@ -82,11 +92,13 @@ if _GPU:
         else:
             cupyx.scatter_add(target, idx, src)
     def _to_cpu(arr): return arr.get().astype(np.float64)
+    def _to_cpu_complex(arr): return np.asarray(arr.get())
     print("GPU available")
 else:
     # numpy.add.at handles complex dtypes natively; no special casing needed.
     def _scatter_add(target, idx, src): xp.add.at(target, idx, src)
     def _to_cpu(arr): return np.asarray(arr, dtype=np.float64)
+    def _to_cpu_complex(arr): return np.asarray(arr)
     print("GPU not available, using CPU instead")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -173,8 +185,14 @@ DEFAULT_TB_MODEL = "acsf_hoppings_M_10_W_6"
 DEFAULT_TB_RCUT: float = 6.0
 DEFAULT_TWIST_ANGLE: float = 9.43
 DEFAULT_NK: int = 60
+DEFAULT_N_BANDS_EACH_SIDE: int = 25
 DEFAULT_TRAJECTORY_DIR = "trajectories/relaxation"
 DEFAULT_OUTPUT_DIR = "bands/propagation"
+DEFAULT_ARPES_OUTPUT_DIR = "bands/arpes_band_gap"
+DEFAULT_ARPES_KY_MIN = 1.5
+DEFAULT_ARPES_KY_MAX = 1.65
+DEFAULT_ARPES_KY_NPTS = 15
+DEFAULT_ARPES_ENERGY_WINDOW_EV = 2.0
 
 # k-path nodes in reduced coordinates (hexagonal cell)
 # a1 = [a, 0, 0]  a2 = [a/2, a√3/2, 0]
@@ -310,6 +328,96 @@ def _discover_traj_files(
     files = sorted(glob.glob(pattern))
     return files
 
+
+def _gamma_centered_kmesh(nx: int, ny: int, nz: int) -> np.ndarray:
+    """Gamma-centered Monkhorst–Pack mesh in reduced coordinates, shape ``(nx*ny*nz, 3)``."""
+    fx = np.arange(int(nx), dtype=float) / float(nx)
+    fy = np.arange(int(ny), dtype=float) / float(ny)
+    fz = np.arange(int(nz), dtype=float) / float(nz)
+    gx, gy, gz = np.meshgrid(fx, fy, fz, indexing="ij")
+    return np.column_stack([gx.ravel(), gy.ravel(), gz.ravel()])
+
+
+def _ky_line_path_cart(
+    ky_min: float,
+    ky_max: float,
+    n_pts: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Line segment along *k_y* at ``k_x = k_z = 0`` in Cartesian reciprocal space.
+
+    Coordinates are absolute inverse Ångströms (Å⁻¹), **not** fractional BZ units.
+  """
+    ky = np.linspace(float(ky_min), float(ky_max), int(n_pts), dtype=float)
+    kvec_cart = np.zeros((int(n_pts), 3), dtype=float)
+    kvec_cart[:, 1] = ky
+    k_dist = np.zeros(int(n_pts), dtype=float)
+    for i in range(1, int(n_pts)):
+        k_dist[i] = k_dist[i - 1] + abs(float(ky[i] - ky[i - 1]))
+    k_node = np.array([0.0, float(k_dist[-1])], dtype=float)
+    return kvec_cart, k_dist, k_node
+
+
+def _pad_band_results(
+    evals_list: List[np.ndarray],
+    evecs_list: Optional[List[np.ndarray]],
+    band_indices_list: List[np.ndarray],
+) -> Tuple[np.ndarray, Optional[np.ndarray], np.ndarray, np.ndarray]:
+    """Pad per-k-point band selections to a common width (NaN / -1 fill)."""
+    n_kpts = len(evals_list)
+    n_per_k = np.array([len(e) for e in evals_list], dtype=np.int64)
+    max_nb = int(np.max(n_per_k)) if n_kpts else 0
+    evals = np.full((n_kpts, max_nb), np.nan, dtype=float)
+    band_indices = np.full((n_kpts, max_nb), -1, dtype=np.int64)
+    evecs = None
+    if evecs_list is not None:
+        n_atoms = evecs_list[0].shape[0] if evecs_list else 0
+        evecs = np.full((n_kpts, n_atoms, max_nb), np.nan, dtype=np.complex128)
+    for ik, (e_row, idx_row) in enumerate(zip(evals_list, band_indices_list)):
+        n = len(e_row)
+        if n == 0:
+            continue
+        evals[ik, :n] = e_row
+        band_indices[ik, :n] = idx_row
+        if evecs is not None and evecs_list is not None:
+            evecs[ik, :, :n] = evecs_list[ik]
+    return evals, evecs, band_indices, n_per_k
+
+
+def _mean_relaxed_structure(traj_files: List[str]):
+    """Mean last-frame geometry: MIC average of positions vs the first sample."""
+    from ase.geometry import find_mic
+    from ase.io import read as ase_read
+
+    if not traj_files:
+        raise ValueError("no trajectory files for mean structure")
+    atoms0 = ase_read(traj_files[0], index=-1)
+    cell = np.asarray(atoms0.get_cell(), dtype=float)
+    pos0 = np.asarray(atoms0.get_positions(), dtype=float)
+    acc = np.zeros_like(pos0)
+    n = 0
+    for path in traj_files:
+        atoms = ase_read(path, index=-1)
+        pos = np.asarray(atoms.get_positions(), dtype=float)
+        if pos.shape != pos0.shape:
+            print(
+                f"  warning: skip {os.path.basename(path)} in mean structure "
+                f"(natoms {pos.shape[0]} != {pos0.shape[0]})",
+                file=sys.stderr,
+                flush=True,
+            )
+            continue
+        mic, _ = find_mic(pos - pos0, cell, pbc=True)
+        acc += pos0 + np.asarray(mic, dtype=float)
+        n += 1
+    if n == 0:
+        raise ValueError("no compatible trajectories for mean structure")
+    out = atoms0.copy()
+    out.calc = None
+    out.set_positions(acc / float(n))
+    return out
+
+
 def _build_bands(
     atoms,
     params: np.ndarray,
@@ -320,7 +428,10 @@ def _build_bands(
     *,
     is_sk: bool = False,
     extra_hp: dict | None = None,
-) -> Tuple[np.ndarray, float]:
+    return_evecs: bool = False,
+    n_keep: int = DEFAULT_N_BANDS_EACH_SIDE,
+    energy_window_ev: Optional[float] = None,
+) -> Tuple:
     """Compute ACSF tight-binding band structure using ``np.linalg.eigh``.
 
     When *is_sk* is True, uses the Slater-Koster model with flat params
@@ -382,6 +493,13 @@ def _build_bands(
     nocc = N // 2
     n_kpts = len(kvec_cart)
     evals_list: list[np.ndarray] = []
+    evecs_list: list[np.ndarray] = []
+    band_indices_list: list[np.ndarray] = []
+    band_lo = max(nocc - int(n_keep), 0)
+    band_hi = min(nocc + int(n_keep), N)
+    use_energy_window = energy_window_ev is not None and float(energy_window_ev) > 0.0
+    if use_energy_window:
+        return_evecs = True
 
     # --- Step 3: Bloch Hamiltonian at each k-point (unified xp path) ---
     # pair_v / hoppings already live on GPU when _GPU (from tb_descriptors/tb_models).
@@ -397,7 +515,8 @@ def _build_bands(
     # cupyx.scatter_add and is equally valid for numpy.add.at.
     lin_idx = pair_i_xp * N + pair_j_xp          # (n_pairs,) flat index into H.ravel()
 
-    for k_cart in kvec_xp:
+    fermi_level = 0.0
+    for ik, k_cart in enumerate(kvec_xp):
         phases   = xp.exp(1j * (pair_v_xp @ k_cart))        # (n_pairs,) complex128
         # Cast explicitly so scatter accepts complex even when hoppings is float64
         hop_vals = (hoppings_xp * phases).astype(xp.complex128)
@@ -408,24 +527,41 @@ def _build_bands(
         H      = xp.asarray(H).reshape(N, N)                 # guard + 2-D view
         H      = H + H.conj().T                              # symmetrize
 
-        w = xp.linalg.eigh(H)[0]                             # eigenvalues only
-        evals_list.append(_to_cpu(w))
+        if return_evecs:
+            w, v = xp.linalg.eigh(H)
+        else:
+            w = xp.linalg.eigh(H)[0]
+            v = None
+        w_cpu = _to_cpu(w)
+        if ik == 0:
+            fermi_level = float((w_cpu[nocc] + w_cpu[nocc - 1]) / 2.0)
+            if not use_energy_window:
+                band_lo = max(nocc - int(n_keep), 0)
+                band_hi = min(nocc + int(n_keep), N)
+        if use_energy_window:
+            idx = np.where(np.abs(w_cpu - fermi_level) <= float(energy_window_ev))[0]
+            evals_list.append(w_cpu[idx] - fermi_level)
+            band_indices_list.append(np.asarray(idx, dtype=np.int64))
+            if return_evecs:
+                evecs_list.append(_to_cpu_complex(v[:, idx]))
+                del v
+        else:
+            evals_list.append(w_cpu[band_lo:band_hi] - fermi_level)
+            if return_evecs:
+                evecs_list.append(_to_cpu_complex(v[:, band_lo:band_hi]))
+                del v
 
-    evals = np.array(evals_list)  # (n_kpts, N)  — always real NumPy from here on
+    if use_energy_window:
+        evals, evecs, band_indices, n_bands_per_k = _pad_band_results(
+            evals_list,
+            evecs_list if return_evecs else None,
+            band_indices_list,
+        )
+        return evals, fermi_level, evecs, int(band_lo), int(band_hi), band_indices, n_bands_per_k
 
-    # --- Fermi level: midpoint between the highest occupied and lowest
-    #     unoccupied band at the first k-point (half-filling). ---
-    
-    fermi_level = float((evals[0, nocc] + evals[0, nocc - 1]) / 2.0)
-    evals = evals - fermi_level
-
-    # Keep only 50 bands centred on the Fermi level (25 below, 25 above).
-    n_keep = 25
-    band_lo = max(nocc - n_keep, 0)
-    band_hi = min(nocc + n_keep, N)
-    evals = evals[:, band_lo:band_hi]
-
-    return evals, fermi_level
+    evals = np.array(evals_list)
+    evecs = np.stack(evecs_list, axis=0) if return_evecs else None
+    return evals, fermi_level, evecs, int(band_lo), int(band_hi), None, None
 
 
 # ---------------------------------------------------------------------------
@@ -555,6 +691,59 @@ def main() -> None:
         default=DEFAULT_NK,
         help=f"k-points per high-symmetry segment (default: {DEFAULT_NK}).",
     )
+    p.add_argument(
+        "--k-mesh",
+        type=int,
+        nargs=3,
+        metavar=("NX", "NY", "NZ"),
+        default=None,
+        help="Gamma-centered k-mesh (replaces the K–Γ–M–K path). Example: 10 10 1.",
+    )
+    p.add_argument(
+        "--arpes-ky-path",
+        action="store_true",
+        help=(
+            "ARPES comparison path: ky from 1.5 to 1.65 Å⁻¹ in 15 equally spaced "
+            "points with kx = kz = 0 (Cartesian k in Å⁻¹, not fractional BZ). "
+            "Saves eigenvalues/eigenvectors within --energy-window-ev of E_F."
+        ),
+    )
+    p.add_argument(
+        "--energy-window-ev",
+        type=float,
+        default=None,
+        help=(
+            "When set, save all bands with |E − E_F| ≤ this value (eV) and their "
+            f"eigenvectors. Default {DEFAULT_ARPES_ENERGY_WINDOW_EV} for "
+            "--arpes-ky-path."
+        ),
+    )
+    p.add_argument(
+        "--mean-structure",
+        action="store_true",
+        help=(
+            "Use the MIC-average of last frames over all discovered .traj files "
+            "instead of pairing each sample to its own structure."
+        ),
+    )
+    p.add_argument(
+        "--mean-tb",
+        action="store_true",
+        help="Use the mean hopping-parameter vector of the TB ensemble for every sample.",
+    )
+    p.add_argument(
+        "--save-eigenvectors",
+        action="store_true",
+        help=(
+            "Save eigenvectors for the same Fermi-window bands as eigenvalues "
+            "(n_keep on each side of E_F)."
+        ),
+    )
+    p.add_argument(
+        "--compressed",
+        action="store_true",
+        help="Write np.savez_compressed instead of np.savez.",
+    )
 
     # --- Reproducibility ---
     p.add_argument(
@@ -569,6 +758,14 @@ def main() -> None:
 
     add_hyperparam_args(p)
     args, _unknown = p.parse_known_args()
+    if args.arpes_ky_path and args.k_mesh is not None:
+        p.error("--arpes-ky-path and --k-mesh are mutually exclusive.")
+    if args.arpes_ky_path:
+        if args.energy_window_ev is None:
+            args.energy_window_ev = DEFAULT_ARPES_ENERGY_WINDOW_EV
+        args.save_eigenvectors = True
+        if args.output_dir == DEFAULT_OUTPUT_DIR:
+            args.output_dir = DEFAULT_ARPES_OUTPUT_DIR
     cli_hyperparams = collect_workflow_hyperparams(args, _unknown)
     if cli_hyperparams:
         print(f"TB CLI hyperparameters: {cli_hyperparams}", flush=True)
@@ -622,11 +819,14 @@ def main() -> None:
     tb_ens_dict = load_ensemble_pickle(tb_pkl_path)
     tb_ensemble_raw = np.asarray(tb_ens_dict["ensemble"]["hopping"], dtype=float)
     tb_ensemble = _shuffle_ensemble(tb_ensemble_raw, args.seed)
+    tb_params_mean = np.mean(tb_ensemble_raw, axis=0)
     print(
         f"TB ensemble (seed={args.seed}): "
         f"{tb_ensemble_raw.shape[0]} members × {tb_ensemble_raw.shape[1]} features",
         flush=True,
     )
+    if args.mean_tb:
+        print("  TB parameters: ensemble mean (one vector for all structures)", flush=True)
 
     # -----------------------------------------------------------------------
     # Expand model patterns
@@ -637,15 +837,52 @@ def main() -> None:
     print(f"\nModels: {models}", flush=True)
 
     # -----------------------------------------------------------------------
-    # k-path (same for all models / samples — cell is nearly identical)
+    # k-path or k-mesh
     # -----------------------------------------------------------------------
-    kvec_red, k_dist, k_node = _k_path(_SYM_PTS, args.n_kpts)
-    # Cartesian conversion is done per-sample using the relaxed cell.
-    print(
-        f"\nk-path: K → Γ → M → K  "
-        f"({args.n_kpts} pts/segment → {len(kvec_red)} total k-points)",
-        flush=True,
-    )
+    use_cartesian_k = False
+    kvec_red: Optional[np.ndarray] = None
+    if args.arpes_ky_path:
+        kvec_cart_path, k_dist, k_node = _ky_line_path_cart(
+            DEFAULT_ARPES_KY_MIN,
+            DEFAULT_ARPES_KY_MAX,
+            DEFAULT_ARPES_KY_NPTS,
+        )
+        use_cartesian_k = True
+        sym_labels = [
+            rf"$k_y={DEFAULT_ARPES_KY_MIN:g}$",
+            rf"$k_y={DEFAULT_ARPES_KY_MAX:g}$",
+        ]
+        print(
+            f"\nARPES ky-path: kx = kz = 0, "
+            f"ky = {DEFAULT_ARPES_KY_MIN:g}–{DEFAULT_ARPES_KY_MAX:g} Å⁻¹ "
+            f"({DEFAULT_ARPES_KY_NPTS} points, Cartesian)",
+            flush=True,
+        )
+        print(
+            f"  energy window: |E − E_F| ≤ {args.energy_window_ev:g} eV",
+            flush=True,
+        )
+    elif args.k_mesh is not None:
+        nx, ny, nz = (int(args.k_mesh[0]), int(args.k_mesh[1]), int(args.k_mesh[2]))
+        kvec_red = _gamma_centered_kmesh(nx, ny, nz)
+        kvec_cart_path = None
+        k_dist = np.zeros(len(kvec_red), dtype=float)
+        k_node = np.zeros(0, dtype=float)
+        sym_labels = []
+        print(
+            f"\nk-mesh: {nx}×{ny}×{nz} Gamma-centered  ({len(kvec_red)} k-points)",
+            flush=True,
+        )
+    else:
+        nx = ny = nz = 0
+        kvec_red, k_dist, k_node = _k_path(_SYM_PTS, args.n_kpts)
+        kvec_cart_path = None
+        sym_labels = list(_SYM_LABELS)
+        print(
+            f"\nk-path: K → Γ → M → K  "
+            f"({args.n_kpts} pts/segment → {len(kvec_red)} total k-points)",
+            flush=True,
+        )
 
     # -----------------------------------------------------------------------
     # Main loop: models → traj files → band structures
@@ -695,7 +932,7 @@ def main() -> None:
 
         n_trajs = len(traj_files)
         n_tb = tb_ensemble.shape[0]
-        if n_tb < n_trajs:
+        if n_tb < n_trajs and not args.mean_structure:
             print(
                 f"  Warning: hopping ensemble has {n_tb} samples but {n_trajs} "
                 f"traj files found.  Hopping samples will be cycled.",
@@ -707,7 +944,19 @@ def main() -> None:
             flush=True,
         )
 
-        # --- Prepare output directory ---
+        mean_atoms = None
+        if args.mean_structure:
+            print("  Building mean relaxed structure over all traj files …", flush=True)
+            mean_atoms = _mean_relaxed_structure(traj_files)
+            n_work = n_tb
+            print(
+                f"  mean structure: {len(mean_atoms)} atoms; "
+                f"{n_work} TB ensemble band calculations",
+                flush=True,
+            )
+        else:
+            n_work = n_trajs
+
         out_dir = os.path.join(
             args.output_dir,
             _safe_filename_part(model_name),
@@ -717,11 +966,16 @@ def main() -> None:
         )
         os.makedirs(out_dir, exist_ok=True)
 
-        # --- Process each trajectory ---
+        saver = np.savez_compressed if (args.compressed or args.save_eigenvectors) else np.savez
+
+        n_kpts_path = (
+            len(kvec_cart_path) if use_cartesian_k else len(kvec_red)  # type: ignore[arg-type]
+        )
+
         n_done = 0
         n_skipped = 0
 
-        for sample_idx, traj_path in enumerate(traj_files):
+        for sample_idx in range(n_work):
             npz_path = _bands_output_path(out_dir, sample_idx)
             existing = _existing_bands_npz(out_dir, sample_idx)
 
@@ -733,34 +987,44 @@ def main() -> None:
                 n_skipped += 1
                 continue
 
-            print(
-                f"  sample {sample_idx:04d}/{n_trajs - 1}  traj={os.path.basename(traj_path)} …",
-                end="  ",
-                flush=True,
-            )
-
-            # --- Read relaxed structure (frame index 1) ---
-            try:
-                from ase.io import read as ase_read
-                relaxed = ase_read(traj_path, index=1)
-            except Exception as exc:
+            if args.mean_structure:
+                relaxed = mean_atoms
                 print(
-                    f"\n  Warning: failed to read {traj_path}: {exc}  Skipping.",
-                    file=sys.stderr,
+                    f"  sample {sample_idx:04d}/{n_work - 1}  mean_relax + TB[{sample_idx % n_tb}] …",
+                    end="  ",
+                    flush=True,
                 )
-                continue
+            else:
+                traj_path = traj_files[sample_idx]
+                print(
+                    f"  sample {sample_idx:04d}/{n_work - 1}  traj={os.path.basename(traj_path)} …",
+                    end="  ",
+                    flush=True,
+                )
+                try:
+                    from ase.io import read as ase_read
+                    relaxed = ase_read(traj_path, index=-1)
+                except Exception as exc:
+                    print(
+                        f"\n  Warning: failed to read {traj_path}: {exc}  Skipping.",
+                        file=sys.stderr,
+                    )
+                    continue
 
-            # --- Select hopping ensemble sample (cycle if necessary) ---
-            tb_params = tb_ensemble[sample_idx % n_tb]
+            if args.mean_tb:
+                tb_params = tb_params_mean
+            else:
+                tb_params = tb_ensemble[sample_idx % n_tb]
 
-            # --- Cartesian k-path using the relaxed cell ---
             cell = np.array(relaxed.get_cell(), dtype=float)
-            recip = _get_recip_cell(cell.T)        # (3, 3) Å⁻¹ with 2π
-            kvec_cart = kvec_red @ recip           # (n_kpts, 3)
+            if use_cartesian_k:
+                kvec_cart = kvec_cart_path
+            else:
+                recip = _get_recip_cell(cell.T)
+                kvec_cart = kvec_red @ recip  # type: ignore[operator]
 
-            # --- Compute band structure ---
             try:
-                evals, fermi_level = _build_bands(
+                band_result = _build_bands(
                     relaxed,
                     tb_params,
                     kvec_cart,
@@ -769,6 +1033,12 @@ def main() -> None:
                     args.tb_rcut,
                     is_sk=tb_canonical.startswith("ACSF_hoppings_sk"),
                     extra_hp=cli_hyperparams or None,
+                    return_evecs=bool(args.save_eigenvectors),
+                    n_keep=DEFAULT_N_BANDS_EACH_SIDE,
+                    energy_window_ev=args.energy_window_ev,
+                )
+                evals, fermi_level, evecs, band_lo, band_hi, band_indices, n_bands_per_k = (
+                    band_result
                 )
             except Exception as exc:
                 print(
@@ -778,32 +1048,51 @@ def main() -> None:
                 )
                 continue
 
-            # --- Save ---
-            np.savez(
-                npz_path,
-                evals=evals,                    # (n_kpts, N_atoms) eV, E_F = 0
-                kvec=kvec_red,                  # (n_kpts, 3) reduced coordinates
-                k_dist=k_dist,                  # (n_kpts,)
-                k_node=k_node,                  # (n_nodes,)
-                sym_pts=np.array(_SYM_PTS),     # (4, 3)
-                sym_labels=np.array(_SYM_LABELS),
-                fermi_level=fermi_level,        # scalar eV (before subtraction)
-                tb_params=tb_params,            # (n_features,) hopping weights used
+            payload = dict(
+                evals=evals,
+                kvec=kvec_cart if use_cartesian_k else kvec_red,
+                kvec_units="1/Angstrom" if use_cartesian_k else "crystal",
+                k_dist=k_dist,
+                k_node=k_node,
+                fermi_level=fermi_level,
+                tb_params=tb_params,
                 n_atoms=np.int64(len(relaxed)),
                 twist_angle=np.float64(args.twist_angle),
+                band_lo=np.int64(band_lo),
+                band_hi=np.int64(band_hi),
+                mean_structure=np.bool_(bool(args.mean_structure)),
+                mean_tb=np.bool_(bool(args.mean_tb)),
+                arpes_ky_path=np.bool_(bool(args.arpes_ky_path)),
             )
+            if sym_labels:
+                payload["sym_labels"] = np.array(sym_labels)
+            if not use_cartesian_k:
+                payload["sym_pts"] = np.array(_SYM_PTS)
+            if args.k_mesh is not None:
+                payload["k_mesh"] = np.array(args.k_mesh, dtype=np.int64)
+            if args.energy_window_ev is not None:
+                payload["energy_window_ev"] = np.float64(args.energy_window_ev)
+            if band_indices is not None:
+                payload["band_indices"] = band_indices
+            if n_bands_per_k is not None:
+                payload["n_bands_per_k"] = n_bands_per_k
+            if evecs is not None:
+                payload["evecs"] = evecs
+
+            saver(npz_path, **payload)
 
             n_done += 1
-            n_bands = evals.shape[1]
+            n_bands = evals.shape[1] if evals.ndim == 2 else 0
+            extra = f"  evecs={evecs.shape}" if evecs is not None else ""
             print(
-                f"done  evals=({len(kvec_red)}, {n_bands})  "
+                f"done  evals=({n_kpts_path}, {n_bands}){extra}  "
                 f"E_F={fermi_level:.4f} eV  → {os.path.basename(npz_path)}",
                 flush=True,
             )
 
         print(
             f"\n  {model_name}: {n_done} computed, {n_skipped} skipped "
-            f"(already existed), {n_trajs - n_done - n_skipped} failed.",
+            f"(already existed), {n_work - n_done - n_skipped} failed.",
             flush=True,
         )
 

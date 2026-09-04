@@ -4,7 +4,7 @@ Shared model resolution for UQ propagation scripts.
 Supports ensembles for:
 
 * LAMMPS-backed: ``POD_energy``, ``PODD3_energy``, ``TETB_POD``, ``Tersoff+DRIP``,
-  ``Tersoff+Kolmogorov_Crespi``
+  ``Tersoff+Kolmogorov_Crespi``, ``POD+extep+ILP``, ``POD+LJ_continuum``
 * Python-backed: ``Allegro_energy`` (NequIP/Allegro checkpoint)
 """
 
@@ -33,6 +33,8 @@ UQ_LAMMPS_MODELS = frozenset(
         "TETB_POD",
         "Tersoff+DRIP",
         "Tersoff+Kolmogorov_Crespi",
+        "POD+extep+ILP",
+        "POD+LJ_continuum",
     }
 )
 
@@ -46,6 +48,10 @@ def is_uq_lammps_model(model_name: str) -> bool:
     if model_name.startswith("POD_energy") or model_name.startswith("PODD3_energy"):
         return True
     if model_name.startswith("TETB_POD"):
+        return True
+    if model_name.startswith("POD+extep+ILP"):
+        return True
+    if model_name.startswith("POD+LJ_continuum"):
         return True
     return False
 
@@ -66,6 +72,10 @@ def resolve_load_name(model_name: str) -> str:
         return "Allegro_energy"
     if model_name.startswith("PODD3_energy"):
         return model_name if model_name == "PODD3_energy" else "PODD3_energy"
+    if model_name.startswith("POD+extep+ILP"):
+        return "POD+extep+ILP"
+    if model_name.startswith("POD+LJ_continuum"):
+        return "POD+LJ_continuum"
     if model_name.startswith("POD_energy"):
         return model_name if model_name == "POD_energy" else "POD_energy"
     if model_name.startswith("TETB_POD"):
@@ -76,6 +86,36 @@ def resolve_load_name(model_name: str) -> str:
         f"Unsupported model for UQ propagation: {model_name!r}. "
         f"Expected LAMMPS model, Allegro_energy*, or POD/TETB/PODD3 folder name."
     )
+
+
+def pod_ensemble_name_for_extep_ilp(model_name: str) -> str:
+    """Map ``POD+extep+ILP`` names onto the underlying POD_energy ensemble folder."""
+    default = "POD_energy_POD_index_15_8bb97b2162397248"
+    if model_name == "POD+extep+ILP":
+        return default
+    m = re.match(
+        r"^POD\+extep\+ILP_POD_index_(\d+)_([0-9a-f]+)$",
+        model_name,
+        flags=re.I,
+    )
+    if m:
+        return f"POD_energy_POD_index_{int(m.group(1))}_{m.group(2)}"
+    return default
+
+
+def pod_ensemble_name_for_lj_continuum(model_name: str) -> str:
+    """Map ``POD+LJ_continuum`` names onto the underlying POD_energy ensemble folder."""
+    default = "POD_energy_POD_index_15_8bb97b2162397248"
+    if model_name == "POD+LJ_continuum":
+        return default
+    m = re.match(
+        r"^POD\+LJ_continuum_POD_index_(\d+)_([0-9a-f]+)$",
+        model_name,
+        flags=re.I,
+    )
+    if m:
+        return f"POD_energy_POD_index_{int(m.group(1))}_{m.group(2)}"
+    return default
 
 
 def _tetb_mw_from_tag(tag: str) -> Dict[str, int]:
@@ -128,6 +168,20 @@ def mcmc_kw_for_model(model_name: str) -> Dict[str, Any]:
         tag = m.group(1)
         ckpt = resolve_allegro_checkpoint_by_tag(tag)
         return {"allegro_checkpoint": str(ckpt), "allegro_ckpt_tag": tag.lower()}
+
+    if model_name.startswith("POD+extep+ILP"):
+        pod_name = pod_ensemble_name_for_extep_ilp(model_name)
+        m_pod = _RE_POD_INDEX.match(pod_name)
+        if m_pod:
+            return _pod_hyperparams_from_csv_identity(int(m_pod.group(1)), m_pod.group(2))
+        return {}
+
+    if model_name.startswith("POD+LJ_continuum"):
+        pod_name = pod_ensemble_name_for_lj_continuum(model_name)
+        m_pod = _RE_POD_INDEX.match(pod_name)
+        if m_pod:
+            return _pod_hyperparams_from_csv_identity(int(m_pod.group(1)), m_pod.group(2))
+        return {}
 
     m = _RE_POD_INDEX.match(model_name)
     if m:

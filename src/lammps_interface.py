@@ -17,6 +17,8 @@ TersoffKCLammpsCalculator        (hybrid/overlay Tersoff + KC Full)
 TersoffDRIPLammpsCalculator      (hybrid/overlay Tersoff + DRIP)
 PODLammpsCalculator
 PODD3LammpsCalculator            (hybrid/overlay POD + dispersion/d3 DFT-D3)
+PODExtepILPLammpsCalculator      (hybrid/overlay POD + BN extep + BNCH ILP)
+PODLJContinuumSubstrateLammpsCalculator  (POD + continuum LJ 9-3 substrate)
 
 Batch evaluation
 ----------------
@@ -251,12 +253,18 @@ def _write_lammps_structure(
     atoms,
     atom_style: str = "atomic",
     layer_tags: Optional[List[int]] = None,
+    specorder: Optional[List[str]] = None,
 ) -> None:
     """Write an ``ase.Atoms`` object to a LAMMPS data file.
 
     For ``atom_style='full'`` (required by KC and DRIP), molecule IDs are
     computed via :func:`lammps_molecule_ids_from_atoms` and stored in a copy
     of the atoms object before writing.
+
+    Parameters
+    ----------
+    specorder : list[str], optional
+        Explicit LAMMPS atom-type order (must match ``pair_coeff`` element maps).
     """
     from blg_model_builder.lammpsdata import write_lammps_data  # noqa: PLC0415
 
@@ -276,6 +284,7 @@ def _write_lammps_structure(
             velocities=False,
             atom_type_labels=False,
             units="metal",
+            specorder=specorder,
         )
 
 
@@ -449,6 +458,10 @@ class LammpsCalculatorBase:
     def _pair_style_commands(self, tmp_dir: str) -> List[str]:
         raise NotImplementedError
 
+    def _structure_specorder(self, atoms) -> Optional[List[str]]:
+        """Optional explicit LAMMPS atom-type element order for structure files."""
+        return None
+
     # ── Geometry helpers ───────────────────────────────────────────────────────
 
     def _boundary_str(self, atoms) -> str:
@@ -476,6 +489,7 @@ class LammpsCalculatorBase:
             struct_path, atoms,
             atom_style=self._atom_style(),
             layer_tags=getattr(self, "_layer_tags", None),
+            specorder=self._structure_specorder(atoms),
         )
         lmp.command("clear")
         lmp.command("units metal")
@@ -568,8 +582,13 @@ class LammpsCalculatorBase:
         files: List[str] = []
         for i, atoms in enumerate(atoms_list):
             p = os.path.join(batch_dir, f"config_{i:05d}.lmp")
-            _write_lammps_structure(p, atoms, atom_style=atom_style,
-                                    layer_tags=layer_tags)
+            _write_lammps_structure(
+                p,
+                atoms,
+                atom_style=atom_style,
+                layer_tags=layer_tags,
+                specorder=self._structure_specorder(atoms),
+            )
             files.append(p)
         self._batch_files = files
         self._batch_atoms = list(atoms_list)
@@ -2480,4 +2499,460 @@ class TETB_PODLammpsCalculator(LammpsCalculatorBase):
     @property
     def n_pod_params(self) -> int:
         return len(self._pod_params)
+
+
+class PODExtepILPLammpsCalculator(PODLammpsCalculator):
+    """POD (C–C) + BN ExTeP (BN intra) + BNCH ILP (B–C / N–C interlayer).
+
+    Designed for twisted bilayer graphene on monolayer hexagonal BN::
+
+        pair_style hybrid/overlay pod extep ilp/graphene/hbn {ilp_cutoff} 1
+        pair_coeff * * pod  pod_param.pod pod_coeff.pod  NULL C NULL
+        pair_coeff * * extep BN.extep                     B NULL N
+        pair_coeff * * ilp/graphene/hbn BNCH_noCC.ILP     B C N H
+
+    Atom types are forced to ``B, C, N`` (alphabetical).  The ILP file has
+    C–C interactions zeroed so all C–C (intra- and interlayer) is from POD.
+    Requires ``atom_style full`` (molecule IDs label layers).
+
+    For carbon-only cells the calculator falls back to POD-only ``pair_style``.
+
+    UQ propagation varies only the POD coefficients via :meth:`set_parameters`;
+    ExTeP and ILP parameter files are fixed copies.  For B/C/N hybrid cells,
+    :meth:`calculate`, :meth:`evaluate_batch`, and :meth:`relax_structure`
+    evaluate POD on a carbon-only substructure and add ExTeP+ILP on the full
+    cell.  Descriptor routines also strip B/N atoms before POD evaluation.
+    """
+
+    SPECORDER = ["B", "C", "N"]
+    DEFAULT_EXTEP = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "potentials",
+        "BN.extep",
+    )
+    DEFAULT_ILP = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "potentials",
+        "BNCH_noCC.ILP",
+    )
+
+    def __init__(
+        self,
+        hyperparams: Dict,
+        params,
+        *,
+        cutoff: float = 7.0,
+        ilp_cutoff: float = 16.0,
+        extep_path: Optional[str] = None,
+        ilp_path: Optional[str] = None,
+        elements: Optional[List[str]] = None,
+    ) -> None:
+        # POD species file is always single-element C (coeffs are C–C only).
+        super().__init__(
+            hyperparams, params, elements=list(elements or ["C"]), cutoff=cutoff,
+        )
+        self._ilp_cutoff = float(ilp_cutoff)
+        self._extep_path = str(extep_path or self.DEFAULT_EXTEP)
+        self._ilp_path = str(ilp_path or self.DEFAULT_ILP)
+        self._use_hybrid = True
+        for path, label in (
+            (self._extep_path, "ExTeP"),
+            (self._ilp_path, "ILP"),
+        ):
+            if not os.path.isfile(path):
+                raise FileNotFoundError(f"{label} potential file not found: {path}")
+        self._write_potential_files(self._tmpdir)
+
+    def _atom_style(self) -> str:
+        return "full"
+
+    def _structure_specorder(self, atoms) -> Optional[List[str]]:
+        symbols = set(atoms.get_chemical_symbols())
+        if symbols <= {"C"}:
+            return ["C"]
+        return list(self.SPECORDER)
+
+    def _neigh_modify_command(self) -> str:
+        return "neigh_modify delay 0 every 1 check yes one 10000 page 2000000"
+
+    def _write_potential_files(self, tmp_dir: str) -> None:
+        super()._write_potential_files(tmp_dir)
+        # Copy fixed BN potentials into the calc tmpdir for stable absolute paths.
+        if getattr(self, "_extep_path", None):
+            shutil.copy2(self._extep_path, os.path.join(tmp_dir, "BN.extep"))
+        if getattr(self, "_ilp_path", None):
+            shutil.copy2(self._ilp_path, os.path.join(tmp_dir, "BNCH_noCC.ILP"))
+
+    def _pair_style_commands(self, tmp_dir: str) -> List[str]:
+        pf = os.path.join(tmp_dir, "pod_param.pod")
+        cf = os.path.join(tmp_dir, "pod_coeff.pod")
+        if not self._use_hybrid:
+            return [
+                "pair_style pod",
+                f"pair_coeff * * {pf} {cf} C",
+            ]
+        extep = os.path.join(tmp_dir, "BN.extep")
+        ilp = os.path.join(tmp_dir, "BNCH_noCC.ILP")
+        return [
+            f"pair_style hybrid/overlay pod extep "
+            f"ilp/graphene/hbn {self._ilp_cutoff} 1",
+            f"pair_coeff * * pod {pf} {cf} NULL C NULL",
+            f"pair_coeff * * extep {extep} B NULL N",
+            f"pair_coeff * * ilp/graphene/hbn {ilp} B C N",
+        ]
+
+    def _setup_lammps(self, atoms) -> None:
+        symbols = set(atoms.get_chemical_symbols())
+        self._use_hybrid = not (symbols <= {"C"})
+        if self._use_hybrid and not symbols.issubset({"B", "C", "N", "H"}):
+            raise ValueError(
+                f"PODExtepILPLammpsCalculator: unsupported species {sorted(symbols)}"
+            )
+        # Ensure molecule IDs exist for ILP / layer tagging.
+        if self._use_hybrid and not atoms.has("mol-id"):
+            raise ValueError(
+                "PODExtepILPLammpsCalculator requires mol-id array "
+                "(layer molecule IDs) for hybrid BN/graphene cells."
+            )
+        # Inline base setup with a larger neighbor skin for the ILP cutoff.
+        lmp = self._get_lmp()
+        struct_path = os.path.join(self._tmpdir, "structure.lmp")
+        _write_lammps_structure(
+            struct_path, atoms,
+            atom_style=self._atom_style(),
+            layer_tags=getattr(self, "_layer_tags", None),
+            specorder=self._structure_specorder(atoms),
+        )
+        lmp.command("clear")
+        lmp.command("units metal")
+        lmp.command(f"atom_style {self._atom_style()}")
+        lmp.command("atom_modify map array")
+        lmp.command(f"boundary {self._boundary_str(atoms)}")
+        lmp.command("newton on")
+        lmp.command(f"read_data {struct_path}")
+        skin = 2.0 if self._use_hybrid else 0.3
+        lmp.command(f"neighbor {skin} bin")
+        lmp.command(self._neigh_modify_command())
+        for cmd in self._pair_style_commands(self._tmpdir):
+            lmp.command(cmd)
+        self._last_cell = np.array(atoms.get_cell())
+        self._last_natoms = len(atoms)
+
+    def prepare_batch(self, atoms_list, batch_dir: Optional[str] = None) -> None:
+        if atoms_list:
+            symbols = set(atoms_list[0].get_chemical_symbols())
+            self._use_hybrid = not (symbols <= {"C"})
+        super().prepare_batch(atoms_list, batch_dir=batch_dir)
+
+    def evaluate_batch(self, atoms_list=None, params=None):
+        if atoms_list is None:
+            atoms_list = self._batch_atoms
+        if atoms_list:
+            symbols = set(atoms_list[0].get_chemical_symbols())
+            self._use_hybrid = not (symbols <= {"C"})
+        if atoms_list and self._uses_hybrid_structure(atoms_list[0]):
+            return self._evaluate_batch_hybrid(
+                atoms_list, params=params,
+            )
+        return super().evaluate_batch(atoms_list=atoms_list, params=params)
+
+    @staticmethod
+    def _uses_hybrid_structure(atoms) -> bool:
+        """True when the cell contains B/C/N (or B/C/N/H), not pure carbon."""
+        return not (set(atoms.get_chemical_symbols()) <= {"C"})
+
+    @staticmethod
+    def _carbon_substructure(atoms):
+        """Return an ``Atoms`` object containing only carbon sites.
+
+        POD descriptors and descriptor-based energy fits are defined on C–C
+        interactions only.  B and N sites from the hBN substrate are excluded.
+        """
+        from ase import Atoms
+
+        symbols = np.asarray(atoms.get_chemical_symbols())
+        mask = symbols == "C"
+        if not np.any(mask):
+            raise ValueError("POD descriptor evaluation requires at least one C atom.")
+        return Atoms(
+            symbols=symbols[mask].tolist(),
+            positions=np.asarray(atoms.get_positions())[mask],
+            cell=atoms.get_cell(),
+            pbc=atoms.get_pbc(),
+        )
+
+    @staticmethod
+    def _merge_hybrid_results(full_atoms, pod_results, bn_results) -> Dict:
+        """Combine carbon-only POD with ExTeP+ILP on the full B/C/N cell."""
+        symbols = np.asarray(full_atoms.get_chemical_symbols())
+        c_mask = symbols == "C"
+        forces = np.zeros((len(full_atoms), 3), dtype=np.float64)
+        forces[c_mask] = pod_results["forces"] + bn_results["forces"][c_mask]
+        forces[~c_mask] = bn_results["forces"][~c_mask]
+        return {
+            "energy": float(pod_results["energy"] + bn_results["energy"]),
+            "forces": forces,
+        }
+
+    def _evaluate_pod_on_carbon(self, atoms) -> Dict:
+        """POD energy/forces on the carbon substructure (``pair_style pod`` only)."""
+        carbon = self._carbon_substructure(atoms)
+        self._use_hybrid = False
+        self._last_cell = None
+        self._last_natoms = None
+        return super().calculate(carbon)
+
+    def _evaluate_bn_on_full(self, atoms) -> Dict:
+        """ExTeP + ILP energy/forces on the full cell (POD coefficients zeroed)."""
+        saved_params = self._params.copy()
+        try:
+            self.set_parameters(np.zeros_like(self._params))
+            self._use_hybrid = True
+            self._last_cell = None
+            self._last_natoms = None
+            return super().calculate(atoms)
+        finally:
+            self.set_parameters(saved_params)
+            self._last_cell = None
+            self._last_natoms = None
+
+    def calculate(
+        self,
+        atoms=None,
+        properties=("energy", "forces"),
+        system_changes=None,
+    ) -> Dict:
+        """Energy/forces with POD on carbon only and ExTeP+ILP on the full cell."""
+        if atoms is None:
+            raise ValueError("atoms must be provided")
+        if not self._uses_hybrid_structure(atoms):
+            return super().calculate(atoms)
+        pod_results = self._evaluate_pod_on_carbon(atoms)
+        bn_results = self._evaluate_bn_on_full(atoms)
+        self.results = self._merge_hybrid_results(atoms, pod_results, bn_results)
+        return self.results
+
+    def _evaluate_batch_hybrid(self, atoms_list, *, params=None):
+        if params is not None:
+            self.set_parameters(params)
+        if atoms_list is None:
+            atoms_list = self._batch_atoms
+        if atoms_list is None:
+            raise RuntimeError(
+                "prepare_batch() must be called before evaluate_batch() "
+                "when atoms_list is not supplied."
+            )
+        n = len(atoms_list)
+        energies = np.zeros(n, dtype=np.float64)
+        forces_list: List[Optional[np.ndarray]] = [None] * n
+        for i, atoms in enumerate(atoms_list):
+            try:
+                result = self.calculate(atoms)
+                energies[i] = result["energy"]
+                forces_list[i] = result["forces"]
+            except Exception:
+                energies[i] = np.nan
+                forces_list[i] = np.full((len(atoms), 3), np.nan)
+                self._lmp = None
+        self._last_cell = None
+        self._last_natoms = None
+        return energies, forces_list
+
+    def relax_structure(
+        self,
+        atoms,
+        etol: float = _FIRE_RELAX_DEFAULT_ETOL,
+        ftol: float = _FIRE_RELAX_DEFAULT_FTOL,
+        maxiter: int = _FIRE_RELAX_DEFAULT_MAXITER,
+        maxeval: int = _FIRE_RELAX_DEFAULT_MAXEVAL,
+        relax_backend: str = "lammps",
+        relax_fire_kwargs: Optional[Dict[str, Any]] = None,
+        timestep: float = None,
+        *,
+        fire_tmin: float = _LAMMPS_FIRE_TMIN,
+        fire_tmax: float = _LAMMPS_FIRE_TMAX,
+        dump_path: Optional[str] = None,
+        log_path: Optional[str] = None,
+        dump_every: int = 100,
+        min_style: str = "cg",
+    ):
+        """Relax geometry; hybrid B/C/N cells use ASE (split POD/BN evaluation)."""
+        if (
+            self._uses_hybrid_structure(atoms)
+            and _normalize_relax_backend(relax_backend) == "lammps"
+        ):
+            import warnings
+
+            warnings.warn(
+                "PODExtepILPLammpsCalculator: LAMMPS minimize evaluates a single "
+                "unified hybrid potential where POD can see B/N neighbors. "
+                "Using ASE relaxation so POD is evaluated on carbon only.",
+                UserWarning,
+                stacklevel=2,
+            )
+            relax_backend = "ase"
+        return super().relax_structure(
+            atoms,
+            etol=etol,
+            ftol=ftol,
+            maxiter=maxiter,
+            maxeval=maxeval,
+            relax_backend=relax_backend,
+            relax_fire_kwargs=relax_fire_kwargs,
+            timestep=timestep,
+            fire_tmin=fire_tmin,
+            fire_tmax=fire_tmax,
+            dump_path=dump_path,
+            log_path=log_path,
+            dump_every=dump_every,
+            min_style=min_style,
+        )
+
+    def set_parameters(self, params) -> None:
+        """Update POD coefficients only; ExTeP and ILP potentials stay fixed."""
+        super().set_parameters(params)
+
+    def compute_bn_correction(
+        self,
+        atoms_list=None,
+    ) -> Tuple[np.ndarray, List[Optional[np.ndarray]]]:
+        """ExTeP + ILP energies and forces with POD coefficients zeroed."""
+        if atoms_list is None:
+            atoms_list = self._batch_atoms
+        if atoms_list is None:
+            raise RuntimeError(
+                "prepare_batch() must be called before compute_bn_correction() "
+                "when atoms_list is not supplied."
+            )
+        n = len(atoms_list)
+        energies = np.zeros(n, dtype=np.float64)
+        forces_list: List[Optional[np.ndarray]] = [None] * n
+        for i, atoms in enumerate(atoms_list):
+            try:
+                result = self._evaluate_bn_on_full(atoms)
+                energies[i] = result["energy"]
+                forces_list[i] = result["forces"]
+            except Exception:
+                energies[i] = np.nan
+                forces_list[i] = np.full((len(atoms), 3), np.nan)
+                self._lmp = None
+        return energies, forces_list
+
+    def compute_pod_descriptors(
+        self,
+        atoms_list=None,
+        *,
+        verbose: bool = False,
+    ) -> np.ndarray:
+        """Global POD descriptors summed over carbon atoms only.
+
+        For B/C/N hybrid cells the BN contribution is excluded by evaluating
+        descriptors on a carbon-only substructure with ``pair_style pod``.
+        """
+        if atoms_list is None:
+            atoms_list = self._batch_atoms
+        if atoms_list is None:
+            raise RuntimeError(
+                "prepare_batch() must be called before compute_pod_descriptors() "
+                "when atoms_list is not supplied."
+            )
+        carbon_list = [self._carbon_substructure(atoms) for atoms in atoms_list]
+        return super().compute_pod_descriptors(carbon_list, verbose=verbose)
+
+    def compute_pod_atom_descriptors(
+        self,
+        atoms,
+        *,
+        compute_id: str = "pod_atom_desc",
+    ) -> np.ndarray:
+        """Per-atom POD descriptors for carbon sites only."""
+        carbon = self._carbon_substructure(atoms)
+        return super().compute_pod_atom_descriptors(carbon, compute_id=compute_id)
+
+
+class PODLJContinuumSubstrateLammpsCalculator(PODLammpsCalculator):
+    """POD (C–C) plus a fixed continuum LJ 9–3 hBN bulk substrate.
+
+    Carbon–carbon interactions use the POD pair style.  The substrate is a
+    semi-infinite continuum representing bulk hBN (Steele / integrated LJ
+    12–6 → 9–3), applied with LAMMPS ``fix addforce`` + ``energy`` (same
+    mechanism as ``example_lj_continuum_substrate.in``), not pairwise
+    ``lj/cut``.
+
+    Fitted so a graphene sheet above the continuum plane has::
+
+        z_eq = 3.35 Å,   E_bind = 0.0415 eV / C atom
+
+    with hBN number density ``q = 0.077495 Å^-3``.  ε and σ are refit for
+    that continuum 9–3 form (they differ from the example file, which used
+    pairwise-style ``σ = z_eq / 2^(1/6)`` and set ε to the binding energy).
+
+    UQ propagation varies only POD coefficients via :meth:`set_parameters`;
+    continuum LJ parameters stay fixed.  To probe the substrate alone, pass
+    zero POD coefficients.
+    """
+
+    # Continuum LJ 9-3 fit (see uncertainty_quantification/_fit_lj_continuum.py)
+    DEFAULT_Z_EQ = 3.35  # Å
+    DEFAULT_E_BIND = 0.0415  # eV / atom
+    DEFAULT_EPS = 0.0040806808  # eV
+    DEFAULT_SIGMA = 3.90272672  # Å
+    DEFAULT_Q = 0.077495  # Å^-3 (hBN bulk continuum density)
+    DEFAULT_SH = 0.0  # Å substrate plane height
+
+    def __init__(
+        self,
+        hyperparams: Dict,
+        params,
+        *,
+        cutoff: float = 7.0,
+        elements: Optional[List[str]] = None,
+        eps: Optional[float] = None,
+        sigma: Optional[float] = None,
+        density: Optional[float] = None,
+        substrate_z: Optional[float] = None,
+    ) -> None:
+        super().__init__(
+            hyperparams, params, elements=list(elements or ["C"]), cutoff=cutoff,
+        )
+        self._lj_eps = float(self.DEFAULT_EPS if eps is None else eps)
+        self._lj_sigma = float(self.DEFAULT_SIGMA if sigma is None else sigma)
+        self._lj_q = float(self.DEFAULT_Q if density is None else density)
+        self._lj_sh = float(self.DEFAULT_SH if substrate_z is None else substrate_z)
+
+    def _continuum_lj_commands(self) -> List[str]:
+        """LAMMPS variable / fix addforce commands for continuum LJ 9–3."""
+        eps = self._lj_eps
+        sig = self._lj_sigma
+        q = self._lj_q
+        sh = self._lj_sh
+        # Match example_lj_continuum_substrate.in algebra (Steele 9-3).
+        e_expr = (
+            f"(4/3*PI*{eps}*({sig})^3*{q}"
+            f"*(1/15*((z-{sh})/{sig})^(-9)-1/2*((z-{sh})/{sig})^(-3)))"
+        )
+        f_expr = (
+            f"(-4/3*PI*{eps}*({sig})^3*{q}"
+            f"*(-9/15*1/{sig}*((z-{sh})/{sig})^(-10)"
+            f"+3/2*1/{sig}*((z-{sh})/{sig})^(-4)))"
+        )
+        return [
+            f"variable        EaddC atom {e_expr}",
+            f"variable        faddC atom {f_expr}",
+            "fix             addEC all addforce 0.0 0.0 v_faddC energy v_EaddC",
+            "fix_modify      addEC energy yes",
+        ]
+
+    def _pair_style_commands(self, tmp_dir: str) -> List[str]:
+        cmds = super()._pair_style_commands(tmp_dir)
+        cmds.extend(self._continuum_lj_commands())
+        return cmds
+
+    def set_parameters(self, params) -> None:
+        """Inject POD coefficients only.
+
+        Continuum LJ ``ε``, ``σ``, ``q``, and substrate height are fixed at
+        construction and are never read from ``params`` / MCMC ensembles.
+        """
+        super().set_parameters(params)
 

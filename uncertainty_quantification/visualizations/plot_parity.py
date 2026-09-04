@@ -43,15 +43,15 @@ _uq_dir = str(UQ_DIR)
 if _uq_dir not in sys.path:
     sys.path.insert(0, _uq_dir)
 
-from plot_bilayer_graphene_pes import (  # noqa: E402
-    _build_model_calculator,
-    _chdir_for_dataloader,
-    _is_pod_family_model,
-    _model_plot_label,
-    _pod_family_load_name,
-    _resolve_model_names,
+from pod_plot_runtime import (  # noqa: E402
+    build_model_calculator as _build_model_calculator,
+    chdir_for_dataloader as _chdir_for_dataloader,
     energy_per_atom_total,
     evaluate_model_energies_on_atoms,
+    is_pod_family_model as _is_pod_family_model,
+    model_plot_label as _model_plot_label,
+    pod_family_load_name as _pod_family_load_name,
+    resolve_model_names as _resolve_model_names,
 )
 
 CSFONT = {"fontname": "sans-serif", "size": 15}

@@ -33,10 +33,11 @@ written there:
   (plotted as $|v_F| / 10^6$ m/s).
 * ``fermi_velocity_vs_twist_angle_samples.png`` — same mean ± std with 10
   individual ensemble-sample curves overlaid.
-* ``flat_band_width_vs_twist_angle.png`` — mean ± std of the flat-band
-  energy spread (max − min over all flat-band eigenvalues and k-points).
-* ``flat_band_width_vs_twist_angle_samples.png`` — same mean ± std with 10
-  individual ensemble-sample curves overlaid.
+* ``flat_band_width_vs_twist_angle.png`` — mean ± std of the occupied
+  flat-band energy spread (the two lowest flat bands), with ARPES data overlaid when
+  ``data/arpes_data_tblg_band_width_Evolution_of_the_flat_band.csv`` is present.
+* ``flat_band_width_vs_twist_angle_samples.png`` — same occupied-band mean ± std with 10
+  individual ensemble-sample curves overlaid (ARPES overlay included).
 * ``band_gaps_vs_twist_angle.png`` — mean ± std of valence and conduction
   band gaps (flat bands vs adjacent dispersive bands, all k-points).
 * ``flat_to_dispersive_gap_presence.png`` — percent of band structures with /
@@ -45,12 +46,12 @@ written there:
 * ``flat_to_dispersive_gap_examples.png`` — side-by-side example band
   structures at θ = 0.99° flagged as having / not having that gap.
 * ``magic_angle_histogram.png`` — histogram of per-sample magic angles (θ at
-  min $|v_F|$ on each ensemble curve); one bin per twist angle in the scan,
+  min $|v_F|$ on complete ensemble curves); one bin per displayed twist angle,
   centered on the nominal θ; line plot of counts vs twist angle overlaid.
 
 Flat bands are the four bands with energy closest to E = 0 at K (used to
-label band indices).  Flat-band width is max(flat eigenvalues) − min(flat
-eigenvalues) over those four bands and every k-point.  The valence-band gap
+label band indices).  Occupied flat-band width is max(flat eigenvalues) − min(flat
+eigenvalues) over the two lowest of those four bands and every k-point.  The valence-band gap
 is min(flat) − max(lower dispersive band); the conduction-band gap is
 min(upper dispersive band) − max(flat), where the dispersive bands are the
 single band indices immediately below/above the flat-band block (reported as
@@ -72,6 +73,7 @@ Examples
 from __future__ import annotations
 
 import argparse
+import csv
 import os
 import re
 import sys
@@ -100,11 +102,16 @@ plt.rcParams.update(
 
 HERE = Path(__file__).resolve().parent
 UQ_DIR = HERE.parent
+REPO_ROOT = UQ_DIR.parent
 DEFAULT_BANDS_DIR = UQ_DIR / "bands" / "propagation"
+DEFAULT_ARPES_BANDWIDTH_CSV = (
+    REPO_ROOT / "data" / "arpes_data_tblg_band_width_Evolution_of_the_flat_band.csv"
+)
 DEFAULT_YLIM = (-0.1, 0.1)   # eV — ±0.5 eV around the Fermi level (E = 0)
 GAP_EXAMPLE_YLIM = (-0.15, 0.15)  # eV — wider window for gap vs no-gap examples
 DEFAULT_DPI = 150
 N_FLAT_BANDS = 4
+N_OCCUPIED_FLAT_BANDS = 2
 K_POINT_INDEX = 0
 N_FERMI_KEEP = 25          # bands below/above nocc in run_uq_propagation_bands.py
 N_FERMI_BANDS = 2 * N_FERMI_KEEP  # 50
@@ -119,6 +126,8 @@ DEFAULT_N_FERMI_SAMPLE_CURVES = 10
 DEFAULT_N_BANDWIDTH_SAMPLE_CURVES = 10
 # Gap between upper flat band and next dispersive band is "open" above this (eV).
 GAP_OPEN_THRESHOLD_EV = 1e-4
+TWIST_PLOT_MIN_DEG = 0.83
+TWIST_PLOT_MAX_DEG = 1.47
 
 # Regex to strip a trailing sample index from a filename to get the group
 # prefix.  Accepts both ``…_sample<NNNN>.npz`` and bare ``sample<NNNN>.npz``.
@@ -184,6 +193,99 @@ def group_npz_files(npz_files: List[Path]) -> Dict[Tuple[Path, str], List[Path]]
     return groups
 
 
+@dataclass(frozen=True)
+class ArpesBandwidthPoint:
+    """ARPES flat-band width at one twist angle (energies in eV)."""
+    theta_deg: float
+    width_ev: float
+    yerr_lower_ev: float
+    yerr_upper_ev: float
+
+
+def load_arpes_bandwidth_csv(path: Path) -> List[ArpesBandwidthPoint]:
+    """
+    Load ARPES flat-band widths from ``arpes_data_tblg_band_width_*.csv``.
+
+    The min / max error-bar columns are **absolute** whisker positions (meV).
+    Asymmetric uncertainties are ``mean − min`` and ``max − mean``; the total
+    span is ``max − min``.
+    """
+    if not path.is_file():
+        print(f"  ARPES bandwidth CSV not found: {path}", file=sys.stderr)
+        return []
+
+    mev_to_ev = 1.0e-3
+    points: List[ArpesBandwidthPoint] = []
+
+    with path.open(newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        if reader.fieldnames is None:
+            return []
+        rows = [{k.strip(): v for k, v in row.items()} for row in reader]
+
+    for row in rows:
+        try:
+            theta = float(row["twist angle"])
+            mean_mev = float(row["mean band width (meV)"])
+            min_mev = float(str(row["min band width error bar"]).strip())
+            max_mev = float(str(row["max band width errorbar"]).strip())
+        except (KeyError, TypeError, ValueError) as exc:
+            print(f"  skip ARPES row {row!r}: {exc}", file=sys.stderr)
+            continue
+
+        mean_ev = mean_mev * mev_to_ev
+        min_ev = min_mev * mev_to_ev
+        max_ev = max_mev * mev_to_ev
+        if max_ev < min_ev:
+            print(
+                f"  skip ARPES θ={theta:g}°: max error bar < min ({max_mev} < {min_mev} meV)",
+                file=sys.stderr,
+            )
+            continue
+
+        points.append(
+            ArpesBandwidthPoint(
+                theta_deg=theta,
+                width_ev=mean_ev,
+                yerr_lower_ev=mean_ev - min_ev,
+                yerr_upper_ev=max_ev - mean_ev,
+            )
+        )
+
+    return sorted(points, key=lambda p: p.theta_deg)
+
+
+def overlay_arpes_bandwidth(
+    ax: plt.Axes,
+    arpes_points: Sequence[ArpesBandwidthPoint],
+) -> None:
+    """Overlay ARPES flat-band width vs twist angle on *ax*."""
+    if not arpes_points:
+        return
+
+    thetas = np.array([p.theta_deg for p in arpes_points], dtype=float)
+    y = np.array([p.width_ev for p in arpes_points], dtype=float)
+    yerr = np.array(
+        [
+            [p.yerr_lower_ev for p in arpes_points],
+            [p.yerr_upper_ev for p in arpes_points],
+        ],
+        dtype=float,
+    )
+    ax.errorbar(
+        thetas,
+        y,
+        yerr=yerr,
+        fmt="D-",
+        color="C2",
+        ms=7,
+        lw=1.8,
+        capsize=4,
+        label="ARPES",
+        zorder=4,
+    )
+
+
 @dataclass
 class BandConfigGroup:
     """All twist-angle ensembles for one (model, T, TB) configuration."""
@@ -200,9 +302,9 @@ class TwistBandMetrics:
     v_f_mean: float = float("nan")
     v_f_std: float = float("nan")
     v_f_n: int = 0
-    bandwidth_mean: float = float("nan")
-    bandwidth_std: float = float("nan")
-    bandwidth_n: int = 0
+    occupied_bandwidth_mean: float = float("nan")
+    occupied_bandwidth_std: float = float("nan")
+    occupied_bandwidth_n: int = 0
     gap_below_mean: float = float("nan")
     gap_below_std: float = float("nan")
     gap_below_n: int = 0
@@ -490,22 +592,6 @@ def plot_mean_bands(
     ax.set_xticklabels(sym_labels, fontdict=CSFONT)
     ax.set_ylabel("Energy (eV)", fontdict=CSFONT)
     ax.set_title(title, fontdict=CSFONT)
-    ax.legend(prop={"family": CSFONT["fontname"], "size": LEGEND_FONTSIZE})
-
-    from matplotlib.lines import Line2D
-    from matplotlib.patches import Patch
-    legend_elements = [
-        Line2D([0], [0], color=band_color, linewidth=1.5,
-               alpha=mean_alpha, label=f"Mean"),
-        Patch(facecolor=band_color, alpha=fill_alpha, label="±1 std"),
-        Line2D([0], [0], color="red", linestyle="--", linewidth=1.0,
-               label="$E_F$"),
-    ]
-    ax.legend(
-        handles=legend_elements,
-        loc="upper right",
-        prop={"family": CSFONT["fontname"], "size": LEGEND_FONTSIZE},
-    )
 
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -631,13 +717,16 @@ def compute_sample_band_metrics(
     k_index: int = K_POINT_INDEX,
     theta_deg: float = float("nan"),
 ) -> Dict[str, float]:
-    """Flat-band width, valence/conduction gaps (all k), and Fermi velocity."""
+    """Occupied flat-band width, valence/conduction gaps, and Fermi velocity."""
     k_index = find_k_point_index(k_dist, k_node) if k_dist is not None else k_index
     fb = identify_flat_band_indices(evals, k_index=k_index)
     n_bands = evals.shape[1]
 
     flat_evals = evals[:, fb]
-    bandwidth = float(np.max(flat_evals) - np.min(flat_evals))
+    occupied_flat_evals = flat_evals[:, :N_OCCUPIED_FLAT_BANDS]
+    occupied_bandwidth = float(
+        np.max(occupied_flat_evals) - np.min(occupied_flat_evals)
+    )
     flat_min = float(np.min(flat_evals))
     flat_max = float(np.max(flat_evals))
 
@@ -658,7 +747,7 @@ def compute_sample_band_metrics(
 
     return {
         "v_f": v_f,
-        "bandwidth": bandwidth,
+        "occupied_bandwidth": occupied_bandwidth,
         "gap_below": gap_below,
         "gap_above": gap_above,
     }
@@ -683,7 +772,7 @@ def compute_twist_band_metrics(
     kvec = data.get("kvec")
     k_dist = data.get("k_dist")
     k_node = data.get("k_node")
-    v_f, bw, gap_lo, gap_hi = [], [], [], []
+    v_f, occupied_bw, gap_lo, gap_hi = [], [], [], []
 
     for s in range(evals_stack.shape[0]):
         metrics = compute_sample_band_metrics(
@@ -695,8 +784,8 @@ def compute_twist_band_metrics(
         )
         if np.isfinite(metrics["v_f"]):
             v_f.append(metrics["v_f"])
-        if np.isfinite(metrics["bandwidth"]):
-            bw.append(metrics["bandwidth"])
+        if np.isfinite(metrics["occupied_bandwidth"]):
+            occupied_bw.append(metrics["occupied_bandwidth"])
         if np.isfinite(metrics["gap_below"]):
             gap_lo.append(metrics["gap_below"])
         if np.isfinite(metrics["gap_above"]):
@@ -704,7 +793,11 @@ def compute_twist_band_metrics(
 
     stats = TwistBandMetrics(theta=theta_deg)
     stats.v_f_mean, stats.v_f_std, stats.v_f_n = _aggregate_metric(v_f)
-    stats.bandwidth_mean, stats.bandwidth_std, stats.bandwidth_n = _aggregate_metric(bw)
+    (
+        stats.occupied_bandwidth_mean,
+        stats.occupied_bandwidth_std,
+        stats.occupied_bandwidth_n,
+    ) = _aggregate_metric(occupied_bw)
     stats.gap_below_mean, stats.gap_below_std, stats.gap_below_n = _aggregate_metric(gap_lo)
     stats.gap_above_mean, stats.gap_above_std, stats.gap_above_n = _aggregate_metric(gap_hi)
     return stats
@@ -714,9 +807,9 @@ def collect_per_sample_observables(
     config: BandConfigGroup,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Build |v_F|(θ) and flat-band width(θ) for each ensemble sample index.
+    Build |v_F|(θ) and occupied flat-band width(θ) for each ensemble sample index.
 
-    Returns ``(thetas, v_f_samples, bandwidth_samples)`` where sample arrays
+    Returns ``(thetas, v_f_samples, occupied_bandwidth_samples)`` where sample arrays
     have shape ``(n_samples, n_theta)``.
     """
     by_sample: Dict[int, Dict[float, Dict[str, float]]] = {}
@@ -771,7 +864,7 @@ def collect_per_sample_observables(
                 theta_deg=th,
             )
             entry: Dict[str, float] = {}
-            for key in ("v_f", "bandwidth"):
+            for key in ("v_f", "occupied_bandwidth"):
                 val = float(metrics[key])
                 if np.isfinite(val):
                     entry[key] = val
@@ -785,16 +878,18 @@ def collect_per_sample_observables(
 
     sample_ids = sorted(by_sample)
     v_f_samples = np.full((len(sample_ids), theta_arr.size), np.nan, dtype=float)
-    bandwidth_samples = np.full((len(sample_ids), theta_arr.size), np.nan, dtype=float)
+    occupied_bandwidth_samples = np.full(
+        (len(sample_ids), theta_arr.size), np.nan, dtype=float
+    )
     for i, sid in enumerate(sample_ids):
         for j, th in enumerate(theta_arr):
             obs = by_sample[sid].get(float(th), {})
             if "v_f" in obs:
                 v_f_samples[i, j] = obs["v_f"]
-            if "bandwidth" in obs:
-                bandwidth_samples[i, j] = obs["bandwidth"]
+            if "occupied_bandwidth" in obs:
+                occupied_bandwidth_samples[i, j] = obs["occupied_bandwidth"]
 
-    return theta_arr, v_f_samples, bandwidth_samples
+    return theta_arr, v_f_samples, occupied_bandwidth_samples
 
 
 def collect_per_sample_fermi_velocities(
@@ -818,14 +913,26 @@ def magic_angle_from_curve(thetas: np.ndarray, v_f: np.ndarray) -> float:
 
 
 def magic_angles_per_sample(thetas: np.ndarray, v_f_samples: np.ndarray) -> np.ndarray:
-    """Magic angle (min-|v_F| θ) for each ensemble sample."""
+    """Magic angle for samples having finite |v_F| at every twist angle."""
     v_f_samples = np.asarray(v_f_samples, dtype=float)
     if v_f_samples.ndim != 2 or v_f_samples.shape[0] == 0:
         return np.array([], dtype=float)
+    complete = np.all(np.isfinite(v_f_samples), axis=1)
     return np.array(
-        [magic_angle_from_curve(thetas, v_f_samples[i, :]) for i in range(v_f_samples.shape[0])],
+        [
+            magic_angle_from_curve(thetas, v_f_samples[i, :])
+            for i in np.flatnonzero(complete)
+        ],
         dtype=float,
     )
+
+
+def complete_sample_mask(v_f_samples: np.ndarray) -> np.ndarray:
+    """Return rows with finite Fermi velocities at every supplied twist angle."""
+    values = np.asarray(v_f_samples, dtype=float)
+    if values.ndim != 2:
+        return np.zeros(0, dtype=bool)
+    return np.all(np.isfinite(values), axis=1)
 
 
 def equal_width_bar_width(thetas: np.ndarray) -> float:
@@ -864,20 +971,26 @@ def plot_magic_angle_histogram(
     v_f_samples: np.ndarray,
     out_path: Path,
     dpi: int = DEFAULT_DPI,
+    display_thetas: Optional[np.ndarray] = None,
 ) -> None:
-    """Histogram of magic angles with equal-width bars centered on each twist angle."""
+    """Histogram of complete-sample magic angles over the displayed twist range."""
     thetas = np.sort(np.asarray(thetas, dtype=float).ravel())
     magic = magic_angles_per_sample(thetas, v_f_samples)
     magic = magic[np.isfinite(magic)]
-    if thetas.size == 0 or magic.size == 0:
+    plot_thetas = (
+        thetas
+        if display_thetas is None
+        else np.sort(np.asarray(display_thetas, dtype=float).ravel())
+    )
+    if plot_thetas.size == 0 or magic.size == 0:
         return
 
-    width = equal_width_bar_width(thetas)
-    counts = counts_per_twist_angle(magic, thetas)
+    width = equal_width_bar_width(plot_thetas)
+    counts = counts_per_twist_angle(magic, plot_thetas)
 
     fig, ax = plt.subplots(figsize=(6.5, 4.5))
     ax.bar(
-        thetas,
+        plot_thetas,
         counts,
         width=width,
         align="center",
@@ -887,7 +1000,7 @@ def plot_magic_angle_histogram(
         label="ensemble samples",
     )
     ax.plot(
-        thetas,
+        plot_thetas,
         counts,
         "ko-",
         linewidth=2.0,
@@ -897,7 +1010,6 @@ def plot_magic_angle_histogram(
 
     ax.set_xlabel(r"Magic angle $\theta$ (°)", fontdict=CSFONT)
     ax.set_ylabel("Count", fontdict=CSFONT)
-    ax.legend(prop={"family": CSFONT["fontname"], "size": LEGEND_FONTSIZE})
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -909,7 +1021,7 @@ def magic_angle_ensemble_stats(
     thetas: np.ndarray,
     v_f_samples: np.ndarray,
 ) -> Tuple[float, float, int]:
-    """Mean and std of magic angle (min-|v_F| θ) over ensemble samples."""
+    """Mean and std of magic angle over complete ensemble samples."""
     angles = magic_angles_per_sample(thetas, v_f_samples)
     angles = angles[np.isfinite(angles)]
     return _aggregate_metric(angles.tolist())
@@ -927,6 +1039,7 @@ def _plot_mean_std_vs_twist(
     color: str = "C0",
     label: str = "ensemble mean",
     y_scale: float = 1.0,
+    arpes_points: Optional[Sequence[ArpesBandwidthPoint]] = None,
 ) -> None:
     """Generic mean ± std line plot vs twist angle."""
     stats_list = sorted(stats_list, key=lambda s: s.theta)
@@ -943,9 +1056,12 @@ def _plot_mean_std_vs_twist(
         ax.plot(t_v, m_v, "o-", color=color, label=label)
         ax.fill_between(t_v, m_v - s_v, m_v + s_v, color=color, alpha=0.3)
 
+    if arpes_points:
+        overlay_arpes_bandwidth(ax, arpes_points)
+        ax.legend(prop={"family": CSFONT["fontname"], "size": LEGEND_FONTSIZE})
+
     ax.set_xlabel(r"Twist angle $\theta$ (°)", fontdict=CSFONT)
     ax.set_ylabel(ylabel, fontdict=CSFONT)
-    ax.legend(prop={"family": CSFONT["fontname"], "size": LEGEND_FONTSIZE})
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -996,6 +1112,7 @@ def plot_vs_twist_with_samples(
     dpi: int = DEFAULT_DPI,
     y_scale: float = 1.0,
     sample_transform=None,
+    arpes_points: Optional[Sequence[ArpesBandwidthPoint]] = None,
 ) -> None:
     """Mean ± std vs twist angle with individual ensemble-sample curves overlaid."""
     if sample_transform is None:
@@ -1040,9 +1157,12 @@ def plot_vs_twist_with_samples(
             label="ensemble std", zorder=2,
         )
 
+    if arpes_points:
+        overlay_arpes_bandwidth(ax, arpes_points)
+        ax.legend(prop={"family": CSFONT["fontname"], "size": LEGEND_FONTSIZE})
+
     ax.set_xlabel(r"Twist angle $\theta$ (°)", fontdict=CSFONT)
     ax.set_ylabel(ylabel, fontdict=CSFONT)
-    ax.legend(prop={"family": CSFONT["fontname"], "size": LEGEND_FONTSIZE})
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1093,21 +1213,23 @@ def plot_flat_band_width_vs_twist_with_samples(
     *,
     n_curves: int = DEFAULT_N_BANDWIDTH_SAMPLE_CURVES,
     dpi: int = DEFAULT_DPI,
+    arpes_points: Optional[Sequence[ArpesBandwidthPoint]] = None,
 ) -> None:
-    """Mean ± std flat-band width(θ) with individual ensemble-sample curves overlaid."""
+    """Mean ± std occupied flat-band width(θ) with sample curves overlaid."""
     plot_vs_twist_with_samples(
         stats_list,
         thetas,
         bandwidth_samples,
-        mean_attr="bandwidth_mean",
-        std_attr="bandwidth_std",
-        ylabel="Flat-band width (eV)",
+        mean_attr="occupied_bandwidth_mean",
+        std_attr="occupied_bandwidth_std",
+        ylabel="Occupied flat-band width (eV)",
         title=rf"{model_name}  $T = {t_label}$  {tb_label}",
-        subtitle="Flat-band width (4 bands nearest $E_F$)",
+        subtitle="Occupied flat-band width (2 lowest of 4 bands nearest $E_F$)",
         out_path=out_path,
         color="C1",
         n_curves=n_curves,
         dpi=dpi,
+        arpes_points=arpes_points,
     )
 
 
@@ -1118,21 +1240,23 @@ def plot_flat_band_width_vs_twist(
     tb_label: str,
     out_path: Path,
     dpi: int = DEFAULT_DPI,
+    arpes_points: Optional[Sequence[ArpesBandwidthPoint]] = None,
 ) -> None:
-    """Flat-band energy width vs twist angle."""
+    """Occupied flat-band energy width vs twist angle, compared with ARPES."""
     _plot_mean_std_vs_twist(
         stats_list,
-        mean_attr="bandwidth_mean",
-        std_attr="bandwidth_std",
-        ylabel="Flat-band width (eV)",
+        mean_attr="occupied_bandwidth_mean",
+        std_attr="occupied_bandwidth_std",
+        ylabel="Occupied flat-band width (eV)",
         title=(
             rf"{model_name}  $T = {t_label}$  {tb_label}"
-            + "\nFlat-band width (all $k$, 4 bands nearest $E_F$)"
+            + "\nOccupied flat-band width (all $k$, 2 lowest of 4 bands)"
         ),
         out_path=out_path,
         dpi=dpi,
         color="C1",
-        label="flat-band width",
+        label="occupied flat-band width",
+        arpes_points=arpes_points,
     )
 
 
@@ -1172,7 +1296,6 @@ def plot_band_gaps_vs_twist(
 
     ax.set_xlabel(r"Twist angle $\theta$ (°)", fontdict=CSFONT)
     ax.set_ylabel("Band gap (eV)", fontdict=CSFONT)
-    ax.legend(prop={"family": CSFONT["fontname"], "size": LEGEND_FONTSIZE})
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1298,7 +1421,6 @@ def plot_flat_to_dispersive_gap_presence(
     ax.set_xlabel(r"Twist angle $\theta$ (°)", fontdict=CSFONT)
     ax.set_ylabel("percent (%)", fontdict=CSFONT)
     ax.set_ylim(0.0, 100.0)
-    ax.legend(prop={"family": CSFONT["fontname"], "size": LEGEND_FONTSIZE})
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1559,11 +1681,31 @@ def plot_twist_angle_summaries(
     n_fermi_sample_curves: int = DEFAULT_N_FERMI_SAMPLE_CURVES,
     n_bandwidth_sample_curves: int = DEFAULT_N_BANDWIDTH_SAMPLE_CURVES,
     ylim: Tuple[float, float] = DEFAULT_YLIM,
+    arpes_points: Optional[Sequence[ArpesBandwidthPoint]] = None,
 ) -> None:
     """Write all flat-band summary figures for one (model, T, TB) configuration."""
     if not stats_list:
         return
 
+    stats_for_other_plots = [
+        stats for stats in stats_list
+        if TWIST_PLOT_MIN_DEG <= stats.theta <= TWIST_PLOT_MAX_DEG
+    ]
+    filtered_thetas: Optional[np.ndarray] = None
+    filtered_v_f_samples: Optional[np.ndarray] = None
+    if thetas is not None:
+        all_thetas = np.asarray(thetas, dtype=float)
+        theta_mask = (
+            (all_thetas >= TWIST_PLOT_MIN_DEG)
+            & (all_thetas <= TWIST_PLOT_MAX_DEG)
+        )
+        filtered_thetas = all_thetas[theta_mask]
+        if v_f_samples is not None:
+            values = np.asarray(v_f_samples, dtype=float)
+            if values.ndim == 2 and values.shape[1] == all_thetas.size:
+                filtered_v_f_samples = values[:, theta_mask]
+            else:
+                filtered_v_f_samples = values
     common = dict(
         model_name=config.model_name,
         t_label=config.temperature_label,
@@ -1573,21 +1715,27 @@ def plot_twist_angle_summaries(
     out_dir = config.config_dir
 
     plot_fermi_velocity_vs_twist(
-        stats_list,
+        stats_for_other_plots,
         out_path=out_dir / "fermi_velocity_vs_twist_angle.png",
         **common,
     )
 
     if thetas is not None and v_f_samples is not None and v_f_samples.size > 0:
         plot_fermi_velocity_vs_twist_with_samples(
-            stats_list,
-            thetas,
-            v_f_samples,
+            stats_for_other_plots,
+            filtered_thetas,
+            filtered_v_f_samples,
             out_path=out_dir / "fermi_velocity_vs_twist_angle_samples.png",
             n_curves=n_fermi_sample_curves,
             **common,
         )
 
+        n_complete = int(np.sum(complete_sample_mask(v_f_samples)))
+        print(
+            f"  Samples present at all twist angles with finite |v_F|: "
+            f"{n_complete}/{v_f_samples.shape[0]}",
+            flush=True,
+        )
         magic_mean, magic_std, magic_n = magic_angle_ensemble_stats(thetas, v_f_samples)
         if np.isfinite(magic_mean):
             if np.isfinite(magic_std) and magic_n > 1:
@@ -1610,11 +1758,14 @@ def plot_twist_angle_summaries(
             v_f_samples,
             out_path=out_dir / "magic_angle_histogram.png",
             dpi=dpi,
+            display_thetas=filtered_thetas,
         )
 
+    # Keep the occupied-band/ARPES comparison on the full available angle range.
     plot_flat_band_width_vs_twist(
         stats_list,
         out_path=out_dir / "flat_band_width_vs_twist_angle.png",
+        arpes_points=arpes_points,
         **common,
     )
 
@@ -1625,19 +1776,24 @@ def plot_twist_angle_summaries(
             bandwidth_samples,
             out_path=out_dir / "flat_band_width_vs_twist_angle_samples.png",
             n_curves=n_bandwidth_sample_curves,
+            arpes_points=arpes_points,
             **common,
         )
 
     plot_band_gaps_vs_twist(
-        stats_list,
+        stats_for_other_plots,
         out_path=out_dir / "band_gaps_vs_twist_angle.png",
         **common,
     )
 
     gap_thetas, gaps_per_theta = collect_gap_above_by_twist(config)
+    gap_mask = (
+        (gap_thetas >= TWIST_PLOT_MIN_DEG)
+        & (gap_thetas <= TWIST_PLOT_MAX_DEG)
+    )
     plot_flat_to_dispersive_gap_presence(
-        gap_thetas,
-        gaps_per_theta,
+        gap_thetas[gap_mask],
+        [g for g, keep in zip(gaps_per_theta, gap_mask) if keep],
         out_path=out_dir / "flat_to_dispersive_gap_presence.png",
         dpi=dpi,
     )
@@ -1711,6 +1867,20 @@ def main() -> None:
             f"{DEFAULT_N_FERMI_SAMPLE_CURVES})."
         ),
     )
+    p.add_argument(
+        "--arpes-bandwidth-csv",
+        type=Path,
+        default=DEFAULT_ARPES_BANDWIDTH_CSV,
+        help=(
+            "ARPES flat-band width vs twist angle CSV for bandwidth summary plots "
+            f"(default: {DEFAULT_ARPES_BANDWIDTH_CSV.name})."
+        ),
+    )
+    p.add_argument(
+        "--no-arpes-bandwidth",
+        action="store_true",
+        help="Do not overlay ARPES data on flat-band width vs twist-angle plots.",
+    )
     args = p.parse_args()
 
     os.chdir(UQ_DIR)
@@ -1734,6 +1904,19 @@ def main() -> None:
     )
 
     ylim = tuple(args.ylim)
+
+    arpes_bandwidth_path = Path(args.arpes_bandwidth_csv)
+    if not arpes_bandwidth_path.is_absolute():
+        arpes_bandwidth_path = REPO_ROOT / arpes_bandwidth_path
+    arpes_points: Optional[List[ArpesBandwidthPoint]] = None
+    if not args.no_arpes_bandwidth:
+        arpes_points = load_arpes_bandwidth_csv(arpes_bandwidth_path)
+        if arpes_points:
+            print(
+                f"Loaded {len(arpes_points)} ARPES flat-band width point(s) "
+                f"from {arpes_bandwidth_path}",
+                flush=True,
+            )
 
     if not args.no_mean_bands:
         for (parent_dir, prefix), members in sorted(groups.items()):
@@ -1833,7 +2016,8 @@ def main() -> None:
                         f"|v_F|={format_fermi_velocity(st.v_f_mean)}"
                         f"±{format_fermi_velocity(st.v_f_std) if np.isfinite(st.v_f_std) else 'nan'}"
                         f" (×10⁶ m/s)  "
-                        f"ΔE_flat={st.bandwidth_mean:.4f}±{st.bandwidth_std:.4f} eV  "
+                        f"ΔE_occ={st.occupied_bandwidth_mean:.4f}"
+                        f"±{st.occupied_bandwidth_std:.4f} eV  "
                         f"gap_val={st.gap_below_mean:.4f}±{st.gap_below_std:.4f} eV  "
                         f"gap_cond={st.gap_above_mean:.4f}±{st.gap_above_std:.4f} eV",
                         flush=True,
@@ -1852,6 +2036,7 @@ def main() -> None:
                     n_fermi_sample_curves=args.n_fermi_sample_curves,
                     n_bandwidth_sample_curves=args.n_fermi_sample_curves,
                     ylim=ylim,
+                    arpes_points=arpes_points,
                 )
 
     print("\nDone.", flush=True)

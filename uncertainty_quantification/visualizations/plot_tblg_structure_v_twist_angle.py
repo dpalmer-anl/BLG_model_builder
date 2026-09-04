@@ -10,7 +10,9 @@ one figure is written per extracted quantity (no plot titles):
 * ``aa_layer_sep_vs_twist_angle.png`` — AA-site layer separation
 * ``ab_layer_sep_vs_twist_angle.png`` — AB-site layer separation
 * ``mean_layer_sep_vs_twist_angle.png`` — mean top-layer interlayer
-  separation over the moiré cell
+  separation over the moiré cell (ARPES experiment overlaid when
+  ``data/arpes_extracted_mean_layer_sep_critical_role_lattice_relaxations.csv``
+  is present)
 * ``mean_z_vs_twist_angle.png`` — mean Cartesian *z* over all atoms
 * ``corrugation_amplitude_vs_twist_angle.png`` — AA − AB top-layer
   separation (corrugation amplitude)
@@ -19,12 +21,21 @@ one figure is written per extracted quantity (no plot titles):
 * ``max_intralayer_disp_vs_twist_angle.png`` — largest fitted in-plane
   displacement peak on the moiré cross section
 * ``local_twist_vs_twist_angle.png`` — local twist angle at AA stacking
+* ``rel_uncertainty_vs_twist_angle.png`` — relative uncertainty vs twist
+  for AA/AB layer separation (``σ/|μ − d_eq|`` with primitive AA/AB
+  bilayer equilibria), local twist at AA (``σ/|μ − θ_initial|``),
+  domain wall width, and max intralayer displacement (same colors as
+  the individual mean±std figures)
 * ``cell_vector_lengths_vs_twist_angle.png`` — lengths of cell vectors
   ``|a₁|`` and ``|a₂|`` (first sample only; cell is fixed across the ensemble)
-* ``elastic_inplane_A_mode1_vs_twist_angle.png`` — top-layer elastic-plate
-  in-plane coefficient ``A`` (mode 1)
-* ``elastic_outplane_D_mode1_vs_twist_angle.png`` — top-layer elastic-plate
-  out-of-plane coefficient ``D`` (mode 1)
+* ``elastic_basis_A123_vs_twist_angle.png`` — in-plane sin coefficients
+  ``A₁, A₂, A₃`` (TEM diffraction PLD overlaid on ``A₁`` when xlsx present)
+* ``elastic_basis_A456_vs_twist_angle.png`` — in-plane cos coefficients
+  ``A₄, A₅, A₆``
+* ``elastic_basis_A789_vs_twist_angle.png`` — out-of-plane sin coefficients
+  ``A₇, A₈, A₉``
+* ``elastic_basis_A101112_vs_twist_angle.png`` — out-of-plane cos coefficients
+  ``A₁₀, A₁₁, A₁₂``
 
 All figures are saved in ``trajectories/relaxation/<model_name>/T<label>/``.
 
@@ -102,17 +113,20 @@ For each AA top-layer atom *i*:
 
 The ensemble mean ± std of the per-AA-site local twist angles is plotted.
 
-Elastic plate Fourier coefficients (mode 1, top layer)
------------------------------------------------------
+Elastic plate Fourier coefficients (modes 1–3, top layer)
+---------------------------------------------------------
 Displacements ``u = r_relaxed − r_initial`` on top-layer atoms
 (``z_initial > mean(z_initial)``) are projected onto the continuum elastic
 plate Fourier basis (see ``elastic_plate_basis.py``, ported from
-``Elastic_basis_Dan``).  Reported vs twist:
+``Elastic_basis_Dan``).  Twelve coefficients ``A₁…A₁₂`` are reported vs twist
+(ensemble mean ± std), grouped into four figures:
 
-* in-plane coefficient ``A`` of **mode 1**
-* out-of-plane coefficient ``D`` of **mode 1**
+* ``A₁, A₂, A₃`` — in-plane sin (modes 1–3)
+* ``A₄, A₅, A₆`` — in-plane cos (modes 1–3)
+* ``A₇, A₈, A₉`` — out-of-plane sin (modes 1–3)
+* ``A₁₀, A₁₁, A₁₂`` — out-of-plane cos (modes 1–3)
 
-Ensemble mean ± std.
+TEM diffraction PLD data are overlaid on the ``A₁, A₂, A₃`` figure only.
 
 Examples
 --------
@@ -133,9 +147,9 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -157,7 +171,17 @@ plt.rcParams.update(
 
 HERE = Path(__file__).resolve().parent
 UQ_DIR = HERE.parent
+REPO_ROOT = UQ_DIR.parent
 DEFAULT_TRAJ_ROOT = UQ_DIR / "trajectories" / "relaxation"
+DEFAULT_TEM_PLD_XLSX = (
+    REPO_ROOT / "data" / "pld_amp_data_Torsional_periodic_lattice_distortions.xlsx"
+)
+DEFAULT_ARPES_MEAN_SEP_CSV = (
+    REPO_ROOT
+    / "data"
+    / "arpes_extracted_mean_layer_sep_critical_role_lattice_relaxations.csv"
+)
+PM_TO_ANG = 0.01  # 1 pm = 0.01 Å
 
 _vis_dir = str(HERE)
 if _vis_dir not in sys.path:
@@ -172,11 +196,26 @@ from plot_tblg_cross_section_ensemble import (  # noqa: E402
     discover_ensemble_groups,
     expand_trajectory_path_patterns,
     get_intralayer_displacement_cross_sect,
+    read_initial_and_relaxed_frames,
 )
-from elastic_plate_basis import top_layer_mode1_A_D  # noqa: E402
+from elastic_plate_basis import top_layer_elastic_coeffs  # noqa: E402
+
+N_ELASTIC_COEFFS = 12
+_ELASTIC_GROUP_SPECS: Tuple[Tuple[str, Tuple[int, ...], str], ...] = (
+    ("elastic_basis_A123_vs_twist_angle", (1, 2, 3), r"$A_i$ (Å)"),
+    ("elastic_basis_A456_vs_twist_angle", (4, 5, 6), r"$A_i$ (Å)"),
+    ("elastic_basis_A789_vs_twist_angle", (7, 8, 9), r"$A_i$ (Å)"),
+    ("elastic_basis_A101112_vs_twist_angle", (10, 11, 12), r"$A_i$ (Å)"),
+)
 
 DEFAULT_NN_CUT: float = 1.65        # Å — in-plane NN cut-off for twist angle
 DISP_PEAK_FIT_HALF_WIDTH: float = 8.0  # Å around each section maximum
+
+# Primitive untwisted bilayer equilibrium interlayer separations (Å).
+# From ``bilayer_graphene_elastic_constants_structures.xyz`` ``d0`` labels
+# used by ``plot_elastic_moduli.py`` / ``calc_elastic_constants.py``.
+AA_EQ_LAYER_SEP: float = 3.577
+AB_EQ_LAYER_SEP: float = 3.3909
 
 
 # ---------------------------------------------------------------------------
@@ -227,13 +266,18 @@ class AngleStats:
     lt_std: float = np.nan
     lt_n: int = 0                   # samples with ≥1 AA site with NNs
 
-    # Elastic plate Fourier coeffs (mode 1, top layer), Å
-    A1_mean: float = np.nan
-    A1_std: float = np.nan
-    A1_n: int = 0
-    D1_mean: float = np.nan
-    D1_std: float = np.nan
-    D1_n: int = 0
+    # Elastic plate Fourier coeffs A1..A12 (top layer), Å
+    elastic_mean: np.ndarray = field(
+        default_factory=lambda: np.full(N_ELASTIC_COEFFS, np.nan),
+    )
+    elastic_std: np.ndarray = field(
+        default_factory=lambda: np.full(N_ELASTIC_COEFFS, np.nan),
+    )
+    elastic_n: int = 0
+
+    # Cell vector lengths from the first gated sample (Å; cell is fixed)
+    a1_len: float = np.nan
+    a2_len: float = np.nan
 
     # Atom count of the TBLG cell (from relaxed frame; same for all samples)
     n_atoms: int = 0
@@ -265,7 +309,7 @@ def _mic_vectors(
 
 
 # ---------------------------------------------------------------------------
-# Layer split
+# Layer split / stacking / separations (single pass over positions)
 # ---------------------------------------------------------------------------
 
 def _split_layers(pos: np.ndarray):
@@ -276,10 +320,6 @@ def _split_layers(pos: np.ndarray):
     return top_mask, bot_mask, z_mean
 
 
-# ---------------------------------------------------------------------------
-# Stacking classification (from relaxed frame)
-# ---------------------------------------------------------------------------
-
 def identify_stacking_atoms(relaxed_atoms) -> Tuple[int, int]:
     """Return the AA and AB representative atom indices from the relaxed frame.
 
@@ -289,16 +329,6 @@ def identify_stacking_atoms(relaxed_atoms) -> Tuple[int, int]:
 
     AB site: the top-layer atom with the **smallest** interlayer separation.
     AB/SP hollow sites are pulled inward and sit lowest.
-
-    Parameters
-    ----------
-    relaxed_atoms : ase.Atoms
-        Relaxed TBLG structure (frame 1 of the trajectory).
-
-    Returns
-    -------
-    aa_idx : int  — global atom index of the AA-site representative.
-    ab_idx : int  — global atom index of the AB-site representative.
     """
     pos = np.asarray(relaxed_atoms.get_positions(wrap=False), dtype=float)
     top_mask, _, z_mean = _split_layers(pos)
@@ -309,22 +339,32 @@ def identify_stacking_atoms(relaxed_atoms) -> Tuple[int, int]:
     return aa_idx, ab_idx
 
 
-# ---------------------------------------------------------------------------
-# Layer separation
-# ---------------------------------------------------------------------------
+def relaxed_layer_metrics(relaxed_atoms) -> Dict:
+    """AA/AB sep, mean sep, mean z, corrugation, indices, and atom count."""
+    pos = np.asarray(relaxed_atoms.get_positions(wrap=False), dtype=float)
+    top_mask, _, z_mean = _split_layers(pos)
+    top_idx = np.where(top_mask)[0]
+    if top_idx.size < 1:
+        raise ValueError("no top-layer atoms found")
+    sep_top = 2.0 * (pos[top_idx, 2] - z_mean)
+    aa_local = int(np.argmax(sep_top))
+    ab_local = int(np.argmin(sep_top))
+    aa_sep = float(sep_top[aa_local])
+    ab_sep = float(sep_top[ab_local])
+    return {
+        "aa_idx": int(top_idx[aa_local]),
+        "ab_idx": int(top_idx[ab_local]),
+        "aa_sep": aa_sep,
+        "ab_sep": ab_sep,
+        "mean_sep": float(np.mean(np.abs(sep_top))),
+        "mean_z": z_mean,
+        "corrugation": aa_sep - ab_sep,
+        "n_atoms": int(pos.shape[0]),
+    }
+
 
 def layer_sep_for_indices(relaxed_atoms, atom_idx: np.ndarray) -> np.ndarray:
-    """Compute ``2*(z[atom_idx] - mean(z))`` (Å) for *atom_idx* atoms.
-
-    Parameters
-    ----------
-    relaxed_atoms : ase.Atoms
-    atom_idx : ndarray — atom indices (from the same atoms object).
-
-    Returns
-    -------
-    sep : ndarray, shape (len(atom_idx),) — signed layer separation per atom.
-    """
+    """Compute ``2*(z[atom_idx] - mean(z))`` (Å) for *atom_idx* atoms."""
     pos = np.asarray(relaxed_atoms.get_positions(wrap=False), dtype=float)
     z_mean = float(np.mean(pos[:, 2]))
     return 2.0 * (pos[atom_idx, 2] - z_mean)
@@ -337,21 +377,19 @@ def mean_z_all_atoms(relaxed_atoms) -> float:
 
 
 def mean_top_layer_interlayer_sep(relaxed_atoms) -> float:
-    """
-    Mean interlayer separation (Å) over top-layer atoms in the moiré cell.
-
-    For each top-layer atom (``z > mean(z)``)::
-
-        sep_i = 2 * |z_i − mean(z)|
-
-    Returns the mean of ``sep_i`` over the top layer.
-    """
+    """Mean interlayer separation (Å) over top-layer atoms in the moiré cell."""
     pos = np.asarray(relaxed_atoms.get_positions(wrap=False), dtype=float)
     top_mask, _, z_mean = _split_layers(pos)
     if int(np.count_nonzero(top_mask)) < 1:
         return float("nan")
     sep = 2.0 * np.abs(pos[top_mask, 2] - z_mean)
     return float(np.mean(sep))
+
+
+def cell_vector_lengths(atoms) -> Tuple[float, float]:
+    """Return ``(|a₁|, |a₂|)`` from the first two lattice vectors (Å)."""
+    cell = np.asarray(atoms.get_cell(), dtype=float)
+    return float(np.linalg.norm(cell[0])), float(np.linalg.norm(cell[1]))
 
 
 # ---------------------------------------------------------------------------
@@ -561,22 +599,8 @@ def displacement_metrics_from_peak_fits(
 # ---------------------------------------------------------------------------
 
 def read_both_frames(traj_path: Path):
-    """Return (initial_atoms, relaxed_atoms) via :func:`ase.io.read`.
-
-    Raises ValueError if the trajectory has fewer than 2 frames.
-    Keeps attached calculators so ``atoms.get_forces()`` can be used for gating.
-    """
-    import ase.io
-
-    frames = ase.io.read(str(traj_path), index=":")
-    if not isinstance(frames, list):
-        frames = [frames]
-    if len(frames) < 2:
-        raise ValueError(
-            f"{traj_path.name}: need ≥2 frames (initial + relaxed), "
-            f"found {len(frames)}."
-        )
-    return frames[0], frames[-1]
+    """Return ``(initial_atoms, relaxed_atoms)`` without loading intermediate frames."""
+    return read_initial_and_relaxed_frames(traj_path)
 
 
 def process_sample(
@@ -590,10 +614,8 @@ def process_sample(
     """Extract stacking statistics from one trajectory file.
 
     Returns a dict with keys ``aa_sep, ab_sep, mean_sep, mean_z, corrugation,
-    dw_width, max_intralayer_disp, local_twist, A_mode1, D_mode1``, or None on
-    failure.  Stacking sites are identified from the relaxed frame as the
-    top-layer atoms with the largest (AA) and smallest (AB) interlayer
-    separation.
+    dw_width, max_intralayer_disp, local_twist, A_mode1, D_mode1, a1_len,
+    a2_len, n_atoms``, or None on failure.
 
     Inclusion rule (same as ``plot_tblg_cross_section_ensemble``): require
     saved forces on the relaxed frame with
@@ -609,30 +631,27 @@ def process_sample(
         return None
 
     try:
-        aa_idx, ab_idx = identify_stacking_atoms(relaxed)
+        layer = relaxed_layer_metrics(relaxed)
     except Exception as exc:
         print(f"    stacking id failed {traj_path.name}: {exc}", file=sys.stderr)
         return None
 
-    # Layer separations — single representative atom per site type
-    aa_sep_arr = layer_sep_for_indices(relaxed, np.array([aa_idx]))
-    ab_sep_arr = layer_sep_for_indices(relaxed, np.array([ab_idx]))
-    aa_sep = float(aa_sep_arr[0])
-    ab_sep = float(ab_sep_arr[0])
-
+    a1_len, a2_len = cell_vector_lengths(initial)
     result: Dict = {
-        "aa_sep": aa_sep,
-        "ab_sep": ab_sep,
-        "mean_sep": mean_top_layer_interlayer_sep(relaxed),
-        "mean_z": mean_z_all_atoms(relaxed),
-        "corrugation": aa_sep - ab_sep,
-        "n_atoms": int(len(relaxed)),
-        "A_mode1": float("nan"),
-        "D_mode1": float("nan"),
+        "aa_sep": layer["aa_sep"],
+        "ab_sep": layer["ab_sep"],
+        "mean_sep": layer["mean_sep"],
+        "mean_z": layer["mean_z"],
+        "corrugation": layer["corrugation"],
+        "n_atoms": layer["n_atoms"],
+        "a1_len": a1_len,
+        "a2_len": a2_len,
+        **{f"elastic_A{i}": float("nan") for i in range(1, N_ELASTIC_COEFFS + 1)},
+        "dw_width": float("nan"),
+        "max_intralayer_disp": float("nan"),
+        "local_twist": float("nan"),
     }
 
-    # Fit one peak in each known stacking interval and derive both metrics from
-    # the same smooth peak model.
     try:
         path_len, disp = get_intralayer_displacement_cross_sect(
             initial, relaxed, npoints=npoints,
@@ -642,24 +661,20 @@ def process_sample(
         result["max_intralayer_disp"] = max_disp
     except Exception as exc:
         print(f"    displacement peak fits failed {traj_path.name}: {exc}", file=sys.stderr)
-        result["dw_width"] = float("nan")
-        result["max_intralayer_disp"] = float("nan")
 
-    # Local twist angle (uses AA atom identified from relaxed frame)
     try:
         ltwists = local_twist_at_aa_sites(
-            initial, relaxed, np.array([aa_idx]), theta_deg, nn_cut=nn_cut
+            initial, relaxed, np.array([layer["aa_idx"]]), theta_deg, nn_cut=nn_cut,
         )
-        result["local_twist"] = float(np.mean(ltwists)) if len(ltwists) > 0 else np.nan
+        if len(ltwists) > 0:
+            result["local_twist"] = float(np.mean(ltwists))
     except Exception as exc:
         print(f"    twist calc failed {traj_path.name}: {exc}", file=sys.stderr)
-        result["local_twist"] = np.nan
 
-    # Elastic plate Fourier coeffs (mode 1): in-plane A, out-of-plane D
     try:
-        A1, D1 = top_layer_mode1_A_D(initial, relaxed)
-        result["A_mode1"] = A1
-        result["D_mode1"] = D1
+        coeffs = top_layer_elastic_coeffs(initial, relaxed, num_mode=3)
+        for i, val in enumerate(coeffs, start=1):
+            result[f"elastic_A{i}"] = float(val)
     except Exception as exc:
         print(f"    elastic basis failed {traj_path.name}: {exc}", file=sys.stderr)
 
@@ -670,6 +685,58 @@ def process_sample(
 # Ensemble-level aggregation
 # ---------------------------------------------------------------------------
 
+def _values_within_n_std(values: Sequence[float], n_std: float = 5.0) -> List[float]:
+    """Drop entries more than ``n_std`` sample stds from the mean."""
+    arr = np.asarray(list(values), dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size < 2:
+        return [float(x) for x in arr]
+    mu = float(np.mean(arr))
+    sig = float(np.std(arr, ddof=1))
+    if not np.isfinite(sig) or sig <= 0.0:
+        return [float(x) for x in arr]
+    keep = np.abs(arr - mu) <= n_std * sig
+    return [float(x) for x in arr[keep]]
+
+
+def _mean_std_n(values: Sequence[float]) -> Tuple[float, float, int]:
+    """Return ``(mean, std, n)``; NaNs if empty. ``std=0`` when ``n==1``."""
+    arr = np.asarray([v for v in values if np.isfinite(v)], dtype=float)
+    n = int(arr.size)
+    if n == 0:
+        return float("nan"), float("nan"), 0
+    mean = float(np.mean(arr))
+    std = float(np.std(arr, ddof=1)) if n > 1 else 0.0
+    return mean, std, n
+
+
+_SAMPLE_METRIC_KEYS: Tuple[str, ...] = (
+    "aa_sep",
+    "ab_sep",
+    "mean_sep",
+    "mean_z",
+    "corrugation",
+    "dw_width",
+    "max_intralayer_disp",
+    "local_twist",
+    *(f"elastic_A{i}" for i in range(1, N_ELASTIC_COEFFS + 1)),
+)
+
+# AngleStats field prefixes for each sample-metric key
+_STATS_FIELD_PREFIX: Dict[str, str] = {
+    "aa_sep": "aa_sep",
+    "ab_sep": "ab_sep",
+    "mean_sep": "mean_sep",
+    "mean_z": "mean_z",
+    "corrugation": "corr",
+    "dw_width": "dw",
+    "max_intralayer_disp": "max_disp",
+    "local_twist": "lt",
+}
+
+_OUTLIER_CLIP_KEYS = frozenset({"dw_width", "max_intralayer_disp", "local_twist"})
+
+
 def compute_angle_stats(
     traj_paths: List[Path],
     theta_deg: float,
@@ -678,13 +745,14 @@ def compute_angle_stats(
     npoints: int = DEFAULT_NPOINTS,
     fmax_max: float = DEFAULT_FMAX_MAX,
 ) -> AngleStats:
-    """Collect per-sample results and compute ensemble mean ± std."""
-    aa_seps, ab_seps, mean_seps, mean_zs, corrs, dw_widths, max_disps, local_twists = (
-        [], [], [], [], [], [], [], [],
-    )
-    A1_vals: List[float] = []
-    D1_vals: List[float] = []
+    """Collect per-sample results and compute ensemble mean ± std.
+
+    Each trajectory is read once (initial + final frames only).
+    """
+    buckets: Dict[str, List[float]] = {k: [] for k in _SAMPLE_METRIC_KEYS}
     n_atoms = 0
+    a1_len = float("nan")
+    a2_len = float("nan")
 
     for tp in traj_paths:
         res = process_sample(
@@ -694,89 +762,249 @@ def compute_angle_stats(
             continue
         if n_atoms <= 0 and int(res.get("n_atoms", 0)) > 0:
             n_atoms = int(res["n_atoms"])
-        if np.isfinite(res.get("aa_sep", np.nan)):
-            aa_seps.append(res["aa_sep"])
-        if np.isfinite(res.get("ab_sep", np.nan)):
-            ab_seps.append(res["ab_sep"])
-        if np.isfinite(res.get("mean_sep", np.nan)):
-            mean_seps.append(res["mean_sep"])
-        if np.isfinite(res.get("mean_z", np.nan)):
-            mean_zs.append(res["mean_z"])
-        if np.isfinite(res.get("corrugation", np.nan)):
-            corrs.append(res["corrugation"])
-        if np.isfinite(res.get("dw_width", np.nan)):
-            dw_widths.append(res["dw_width"])
-        if np.isfinite(res.get("max_intralayer_disp", np.nan)):
-            max_disps.append(res["max_intralayer_disp"])
-        if np.isfinite(res.get("local_twist", np.nan)):
-            local_twists.append(res["local_twist"])
-        if np.isfinite(res.get("A_mode1", np.nan)):
-            A1_vals.append(float(res["A_mode1"]))
-        if np.isfinite(res.get("D_mode1", np.nan)):
-            D1_vals.append(float(res["D_mode1"]))
+        if not np.isfinite(a1_len):
+            a1_len = float(res.get("a1_len", np.nan))
+            a2_len = float(res.get("a2_len", np.nan))
+        for key in _SAMPLE_METRIC_KEYS:
+            val = res.get(key, np.nan)
+            if np.isfinite(val):
+                buckets[key].append(float(val))
 
-    stats = AngleStats(theta=theta_deg, n_atoms=int(n_atoms))
+    for key in _OUTLIER_CLIP_KEYS:
+        buckets[key] = _values_within_n_std(buckets[key])
 
-    if aa_seps:
-        stats.aa_sep_mean = float(np.mean(aa_seps))
-        stats.aa_sep_std = float(np.std(aa_seps, ddof=1) if len(aa_seps) > 1 else 0.0)
-        stats.aa_n = len(aa_seps)
+    stats = AngleStats(
+        theta=theta_deg,
+        n_atoms=int(n_atoms),
+        a1_len=a1_len,
+        a2_len=a2_len,
+    )
+    for key, prefix in _STATS_FIELD_PREFIX.items():
+        mean, std, n = _mean_std_n(buckets[key])
+        setattr(stats, f"{prefix}_mean", mean)
+        setattr(stats, f"{prefix}_std", std)
+        setattr(stats, f"{prefix}_n", n)
 
-    if ab_seps:
-        stats.ab_sep_mean = float(np.mean(ab_seps))
-        stats.ab_sep_std = float(np.std(ab_seps, ddof=1) if len(ab_seps) > 1 else 0.0)
-        stats.ab_n = len(ab_seps)
-
-    if mean_seps:
-        stats.mean_sep_mean = float(np.mean(mean_seps))
-        stats.mean_sep_std = float(
-            np.std(mean_seps, ddof=1) if len(mean_seps) > 1 else 0.0
-        )
-        stats.mean_sep_n = len(mean_seps)
-
-    if mean_zs:
-        stats.mean_z_mean = float(np.mean(mean_zs))
-        stats.mean_z_std = float(np.std(mean_zs, ddof=1) if len(mean_zs) > 1 else 0.0)
-        stats.mean_z_n = len(mean_zs)
-
-    if corrs:
-        stats.corr_mean = float(np.mean(corrs))
-        stats.corr_std = float(np.std(corrs, ddof=1) if len(corrs) > 1 else 0.0)
-        stats.corr_n = len(corrs)
-
-    if dw_widths:
-        stats.dw_mean = float(np.mean(dw_widths))
-        stats.dw_std = float(np.std(dw_widths, ddof=1) if len(dw_widths) > 1 else 0.0)
-        stats.dw_n = len(dw_widths)
-
-    if max_disps:
-        stats.max_disp_mean = float(np.mean(max_disps))
-        stats.max_disp_std = float(
-            np.std(max_disps, ddof=1) if len(max_disps) > 1 else 0.0
-        )
-        stats.max_disp_n = len(max_disps)
-
-    if local_twists:
-        stats.lt_mean = float(np.mean(local_twists))
-        stats.lt_std = float(np.std(local_twists, ddof=1) if len(local_twists) > 1 else 0.0)
-        stats.lt_n = len(local_twists)
-
-    if A1_vals:
-        stats.A1_mean = float(np.mean(A1_vals))
-        stats.A1_std = float(np.std(A1_vals, ddof=1) if len(A1_vals) > 1 else 0.0)
-        stats.A1_n = len(A1_vals)
-
-    if D1_vals:
-        stats.D1_mean = float(np.mean(D1_vals))
-        stats.D1_std = float(np.std(D1_vals, ddof=1) if len(D1_vals) > 1 else 0.0)
-        stats.D1_n = len(D1_vals)
-
+    elastic_mean = np.full(N_ELASTIC_COEFFS, np.nan, dtype=float)
+    elastic_std = np.full(N_ELASTIC_COEFFS, np.nan, dtype=float)
+    elastic_n = 0
+    for i in range(1, N_ELASTIC_COEFFS + 1):
+        mean, std, n = _mean_std_n(buckets[f"elastic_A{i}"])
+        elastic_mean[i - 1] = mean
+        elastic_std[i - 1] = std
+        elastic_n = max(elastic_n, n)
+    stats.elastic_mean = elastic_mean
+    stats.elastic_std = elastic_std
+    stats.elastic_n = elastic_n
     return stats
+
+
+# ---------------------------------------------------------------------------
+# TEM diffraction PLD (experimental A₁)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class TemPldA1Point:
+    """TEM diffraction PLD in-plane mode-1 amplitude at one twist angle."""
+    theta_deg: float
+    A1_angstrom: float
+    yerr_angstrom: float
+
+
+def load_tem_pld_A1_data(path: Path) -> List[TemPldA1Point]:
+    """
+    Load TEM PLD ``A₁`` vs twist from ``pld_amp_data_*.xlsx``.
+
+    Columns: twist angle (degrees), PLD amplitude A1 (picometers),
+    errorbar (picometers).  Values are converted to Å for plotting alongside
+    the elastic-basis ``A`` coefficient.
+    """
+    if not path.is_file():
+        print(f"  TEM PLD xlsx not found: {path}", file=sys.stderr)
+        return []
+
+    try:
+        import pandas as pd
+    except ImportError:
+        print("  TEM PLD: pandas required to read xlsx", file=sys.stderr)
+        return []
+
+    try:
+        df = pd.read_excel(path)
+    except ImportError as exc:
+        print(
+            f"  TEM PLD: could not read {path.name} ({exc}); "
+            "install openpyxl to load xlsx.",
+            file=sys.stderr,
+        )
+        return []
+    except Exception as exc:
+        print(f"  TEM PLD: failed to read {path}: {exc}", file=sys.stderr)
+        return []
+
+    # Normalise column names (strip whitespace).
+    df = df.rename(columns={c: str(c).strip() for c in df.columns})
+    theta_col = "twist angle (degrees)"
+    amp_col = "PLD amplitude, A1 (picometers)"
+    err_col = "errorbar (picometers)"
+
+    points: List[TemPldA1Point] = []
+    for _, row in df.iterrows():
+        try:
+            theta = float(row[theta_col])
+            amp_pm = float(row[amp_col])
+            err_pm = float(row[err_col])
+        except (KeyError, TypeError, ValueError) as exc:
+            print(f"  skip TEM PLD row: {exc}", file=sys.stderr)
+            continue
+        if not np.isfinite(err_pm) or err_pm < 0.0:
+            print(f"  skip TEM PLD θ={theta:g}°: invalid errorbar", file=sys.stderr)
+            continue
+        points.append(
+            TemPldA1Point(
+                theta_deg=theta,
+                A1_angstrom=amp_pm * PM_TO_ANG,
+                yerr_angstrom=err_pm * PM_TO_ANG,
+            )
+        )
+    return sorted(points, key=lambda p: p.theta_deg)
+
+
+def overlay_tem_pld_A1(
+    ax: plt.Axes,
+    tem_points: Sequence[TemPldA1Point],
+) -> None:
+    """Overlay TEM diffraction PLD ``A₁`` with error bars on *ax*."""
+    if not tem_points:
+        return
+    thetas = np.array([p.theta_deg for p in tem_points], dtype=float)
+    y = np.array([p.A1_angstrom for p in tem_points], dtype=float)
+    yerr = np.array([p.yerr_angstrom for p in tem_points], dtype=float)
+    ax.errorbar(
+        thetas,
+        y,
+        yerr=yerr,
+        fmt="D-",
+        color="C2",
+        ms=7,
+        lw=1.8,
+        capsize=4,
+        label="TEM diffraction",
+        zorder=4,
+    )
+
+
+# ---------------------------------------------------------------------------
+# ARPES mean interlayer separation (experiment)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ArpesMeanLayerSepPoint:
+    """ARPES-extracted mean interlayer separation at one twist angle."""
+    theta_deg: float
+    sep_angstrom: float
+    yerr_lower: float
+    yerr_upper: float
+
+
+def load_arpes_mean_layer_sep_data(path: Path) -> List[ArpesMeanLayerSepPoint]:
+    """
+    Load ARPES mean layer separation vs twist from CSV.
+
+    Columns: twist angle, mean layer separation (angstroms),
+    errorbar max (angstroms), errorbar min (angstroms).
+    """
+    import csv
+
+    if not path.is_file():
+        print(f"  ARPES mean layer sep CSV not found: {path}", file=sys.stderr)
+        return []
+
+    points: List[ArpesMeanLayerSepPoint] = []
+    with path.open(newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            try:
+                theta = float(str(row["twist angle"]).strip())
+                sep = float(str(row["mean layer separation (angstroms)"]).strip())
+                hi = float(str(row["errorbar max (angstroms)"]).strip())
+                lo = float(str(row["errorbar min (angstroms)"]).strip())
+            except (KeyError, TypeError, ValueError) as exc:
+                print(f"  skip ARPES mean sep row: {exc}", file=sys.stderr)
+                continue
+            yerr_lo = sep - lo
+            yerr_hi = hi - sep
+            if not all(np.isfinite([theta, sep, yerr_lo, yerr_hi])):
+                print(f"  skip ARPES θ={theta:g}°: non-finite values", file=sys.stderr)
+                continue
+            if yerr_lo < 0.0 or yerr_hi < 0.0:
+                print(f"  skip ARPES θ={theta:g}°: invalid error bars", file=sys.stderr)
+                continue
+            points.append(
+                ArpesMeanLayerSepPoint(
+                    theta_deg=theta,
+                    sep_angstrom=sep,
+                    yerr_lower=float(yerr_lo),
+                    yerr_upper=float(yerr_hi),
+                )
+            )
+    return sorted(points, key=lambda p: p.theta_deg)
+
+
+def overlay_arpes_mean_layer_sep(
+    ax: plt.Axes,
+    arpes_points: Sequence[ArpesMeanLayerSepPoint],
+) -> None:
+    """Overlay ARPES mean interlayer separation with asymmetric error bars."""
+    if not arpes_points:
+        return
+    thetas = np.array([p.theta_deg for p in arpes_points], dtype=float)
+    y = np.array([p.sep_angstrom for p in arpes_points], dtype=float)
+    yerr = np.array(
+        [
+            [p.yerr_lower for p in arpes_points],
+            [p.yerr_upper for p in arpes_points],
+        ],
+        dtype=float,
+    )
+    ax.errorbar(
+        thetas,
+        y,
+        yerr=yerr,
+        fmt="^-",
+        color="C2",
+        ms=7,
+        lw=1.8,
+        capsize=4,
+        label="experiment",
+        zorder=4,
+    )
 
 
 # ---------------------------------------------------------------------------
 # Figures
 # ---------------------------------------------------------------------------
+
+# (filename_stem, AngleStats mean attr, std attr, ylabel, color, marker, y=x ref)
+_MEAN_STD_PLOT_SPECS: Tuple[Tuple[str, str, str, str, str, str, bool], ...] = (
+    ("aa_layer_sep_vs_twist_angle", "aa_sep_mean", "aa_sep_std",
+     "AA layer separation (Å)", "C0", "o", False),
+    ("ab_layer_sep_vs_twist_angle", "ab_sep_mean", "ab_sep_std",
+     "AB layer separation (Å)", "C1", "s", False),
+    ("mean_layer_sep_vs_twist_angle", "mean_sep_mean", "mean_sep_std",
+     "mean interlayer separation (Å)", "C5", "P", False),
+    ("mean_z_vs_twist_angle", "mean_z_mean", "mean_z_std",
+     r"mean $z$ (Å)", "C4", "o", False),
+    ("corrugation_amplitude_vs_twist_angle", "corr_mean", "corr_std",
+     "corrugation amplitude (Å)", "C5", "^", False),
+    ("dw_width_vs_twist_angle", "dw_mean", "dw_std",
+     "domain wall width (Å)", "C3", "D", False),
+    ("max_intralayer_disp_vs_twist_angle", "max_disp_mean", "max_disp_std",
+     r"max intralayer disp. mag. (Å)", "C6", "v", False),
+    ("local_twist_vs_twist_angle", "lt_mean", "lt_std",
+     "twist angle at AA stacking (°)", "C2", "o", True),
+)
+
 
 def _plot_mean_std_vs_twist(
     thetas: np.ndarray,
@@ -789,6 +1017,7 @@ def _plot_mean_std_vs_twist(
     marker: str = "o",
     reference_y_equals_x: bool = False,
     dpi: int = 150,
+    arpes_mean_sep_points: Optional[Sequence[ArpesMeanLayerSepPoint]] = None,
 ) -> None:
     """Single mean ± std curve vs twist angle; no title."""
     fig, ax = plt.subplots(figsize=(7.0, 4.5))
@@ -811,12 +1040,13 @@ def _plot_mean_std_vs_twist(
                 label=r"$\theta_\mathrm{local} = \theta_\mathrm{initial}$",
             )
 
+    if arpes_mean_sep_points:
+        overlay_arpes_mean_layer_sep(ax, arpes_mean_sep_points)
+    if arpes_mean_sep_points:
+        ax.legend(prop={"family": CSFONT["fontname"], "size": LEGEND_FONTSIZE})
+
     ax.set_xlabel(xlabel, fontdict=CSFONT)
     ax.set_ylabel(ylabel, fontdict=CSFONT)
-    ax.legend(
-        loc="best",
-        prop={"family": CSFONT["fontname"], "size": LEGEND_FONTSIZE},
-    )
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -825,314 +1055,227 @@ def _plot_mean_std_vs_twist(
     print(f"  Wrote {out_path}", flush=True)
 
 
-def plot_aa_layer_sep_vs_twist(
+def write_mean_std_figures(
     stats_list: List[AngleStats],
-    out_path: Path,
-    dpi: int = 150,
-) -> None:
-    """AA-site layer separation vs twist angle (mean ± std)."""
-    stats_list = sorted(stats_list, key=lambda s: s.theta)
-    thetas = np.array([s.theta for s in stats_list], dtype=float)
-    mean = np.array([s.aa_sep_mean for s in stats_list], dtype=float)
-    std = np.array([s.aa_sep_std for s in stats_list], dtype=float)
-    _plot_mean_std_vs_twist(
-        thetas, mean, std,
-        ylabel="AA layer separation (Å)",
-        out_path=out_path,
-        color="C0",
-        marker="o",
-        dpi=dpi,
-    )
-
-
-def plot_ab_layer_sep_vs_twist(
-    stats_list: List[AngleStats],
-    out_path: Path,
-    dpi: int = 150,
-) -> None:
-    """AB-site layer separation vs twist angle (mean ± std)."""
-    stats_list = sorted(stats_list, key=lambda s: s.theta)
-    thetas = np.array([s.theta for s in stats_list], dtype=float)
-    mean = np.array([s.ab_sep_mean for s in stats_list], dtype=float)
-    std = np.array([s.ab_sep_std for s in stats_list], dtype=float)
-    _plot_mean_std_vs_twist(
-        thetas, mean, std,
-        ylabel="AB layer separation (Å)",
-        out_path=out_path,
-        color="C1",
-        marker="s",
-        dpi=dpi,
-    )
-
-
-def plot_mean_layer_sep_vs_twist(
-    stats_list: List[AngleStats],
-    out_path: Path,
-    dpi: int = 150,
-) -> None:
-    """Mean top-layer interlayer separation over the moiré cell vs twist."""
-    stats_list = sorted(stats_list, key=lambda s: s.theta)
-    thetas = np.array([s.theta for s in stats_list], dtype=float)
-    mean = np.array([s.mean_sep_mean for s in stats_list], dtype=float)
-    std = np.array([s.mean_sep_std for s in stats_list], dtype=float)
-    _plot_mean_std_vs_twist(
-        thetas, mean, std,
-        ylabel="mean interlayer separation (Å)",
-        out_path=out_path,
-        color="C5",
-        marker="P",
-        dpi=dpi,
-    )
-
-
-def plot_mean_z_vs_twist(
-    stats_list: List[AngleStats],
-    out_path: Path,
-    dpi: int = 150,
-) -> None:
-    """Mean Cartesian *z* (all atoms) vs twist angle (mean ± std)."""
-    stats_list = sorted(stats_list, key=lambda s: s.theta)
-    thetas = np.array([s.theta for s in stats_list], dtype=float)
-    mean = np.array([s.mean_z_mean for s in stats_list], dtype=float)
-    std = np.array([s.mean_z_std for s in stats_list], dtype=float)
-    _plot_mean_std_vs_twist(
-        thetas, mean, std,
-        ylabel=r"mean $z$ (Å)",
-        out_path=out_path,
-        color="C4",
-        marker="o",
-        dpi=dpi,
-    )
-
-
-def plot_corrugation_amplitude_vs_twist(
-    stats_list: List[AngleStats],
-    out_path: Path,
-    dpi: int = 150,
-) -> None:
-    """Corrugation amplitude (AA − AB layer sep) vs twist angle (mean ± std)."""
-    stats_list = sorted(stats_list, key=lambda s: s.theta)
-    thetas = np.array([s.theta for s in stats_list], dtype=float)
-    mean = np.array([s.corr_mean for s in stats_list], dtype=float)
-    std = np.array([s.corr_std for s in stats_list], dtype=float)
-    _plot_mean_std_vs_twist(
-        thetas, mean, std,
-        ylabel="corrugation amplitude (Å)",
-        out_path=out_path,
-        color="C5",
-        marker="^",
-        dpi=dpi,
-    )
-
-
-def plot_dw_width_vs_twist(
-    stats_list: List[AngleStats],
-    out_path: Path,
-    dpi: int = 150,
-) -> None:
-    """Domain wall width vs twist angle (mean ± std)."""
-    stats_list = sorted(stats_list, key=lambda s: s.theta)
-    thetas = np.array([s.theta for s in stats_list], dtype=float)
-    mean = np.array([s.dw_mean for s in stats_list], dtype=float)
-    std = np.array([s.dw_std for s in stats_list], dtype=float)
-    _plot_mean_std_vs_twist(
-        thetas, mean, std,
-        ylabel="domain wall width (Å)",
-        out_path=out_path,
-        color="C3",
-        marker="D",
-        dpi=dpi,
-    )
-
-
-def plot_max_intralayer_disp_vs_twist(
-    stats_list: List[AngleStats],
-    out_path: Path,
-    dpi: int = 150,
-) -> None:
-    """Largest fitted displacement peak vs twist angle (mean ± std)."""
-    stats_list = sorted(stats_list, key=lambda s: s.theta)
-    thetas = np.array([s.theta for s in stats_list], dtype=float)
-    mean = np.array([s.max_disp_mean for s in stats_list], dtype=float)
-    std = np.array([s.max_disp_std for s in stats_list], dtype=float)
-    _plot_mean_std_vs_twist(
-        thetas, mean, std,
-        ylabel=r"max intralayer disp. mag. (Å)",
-        out_path=out_path,
-        color="C6",
-        marker="v",
-        dpi=dpi,
-    )
-
-
-def plot_local_twist_vs_theta(
-    stats_list: List[AngleStats],
-    out_path: Path,
-    dpi: int = 150,
-) -> None:
-    """Local twist angle at AA sites vs initial twist angle (mean ± std)."""
-    stats_list = sorted(stats_list, key=lambda s: s.theta)
-    thetas = np.array([s.theta for s in stats_list], dtype=float)
-    mean = np.array([s.lt_mean for s in stats_list], dtype=float)
-    std = np.array([s.lt_std for s in stats_list], dtype=float)
-    _plot_mean_std_vs_twist(
-        thetas, mean, std,
-        ylabel="twist angle at AA stacking (°)",
-        out_path=out_path,
-        color="C2",
-        marker="o",
-        reference_y_equals_x=True,
-        dpi=dpi,
-    )
-
-
-def plot_elastic_inplane_A_mode1_vs_twist(
-    stats_list: List[AngleStats],
-    out_path: Path,
-    dpi: int = 150,
-) -> None:
-    """Top-layer elastic-plate in-plane coefficient ``A`` (mode 1) vs twist."""
-    stats_list = sorted(stats_list, key=lambda s: s.theta)
-    thetas = np.array([s.theta for s in stats_list], dtype=float)
-    mean = np.array([s.A1_mean for s in stats_list], dtype=float)
-    std = np.array([s.A1_std for s in stats_list], dtype=float)
-    _plot_mean_std_vs_twist(
-        thetas, mean, std,
-        ylabel=r"in-plane $A$ (mode 1) (Å)",
-        out_path=out_path,
-        color="C8",
-        marker="o",
-        dpi=dpi,
-    )
-
-
-def plot_elastic_outplane_D_mode1_vs_twist(
-    stats_list: List[AngleStats],
-    out_path: Path,
-    dpi: int = 150,
-) -> None:
-    """Top-layer elastic-plate out-of-plane coefficient ``D`` (mode 1) vs twist."""
-    stats_list = sorted(stats_list, key=lambda s: s.theta)
-    thetas = np.array([s.theta for s in stats_list], dtype=float)
-    mean = np.array([s.D1_mean for s in stats_list], dtype=float)
-    std = np.array([s.D1_std for s in stats_list], dtype=float)
-    _plot_mean_std_vs_twist(
-        thetas, mean, std,
-        ylabel=r"out-of-plane $D$ (mode 1) (Å)",
-        out_path=out_path,
-        color="C9",
-        marker="s",
-        dpi=dpi,
-    )
-
-
-def cell_vector_lengths(atoms) -> Tuple[float, float]:
-    """Return ``(|a₁|, |a₂|)`` from the first two lattice vectors (Å)."""
-    cell = np.asarray(atoms.get_cell(), dtype=float)
-    return float(np.linalg.norm(cell[0])), float(np.linalg.norm(cell[1]))
-
-
-def collect_cell_lengths_first_sample(
-    angle_groups: List[EnsembleGroup],
+    out_dir: Path,
     *,
-    fmax_max: float = DEFAULT_FMAX_MAX,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Lattice-vector lengths from the **first** trajectory at each twist angle
-    that passes the fmax gate.
-
-    The cell is static across ensemble samples, so only one sample is needed.
-    Uses the initial frame of that trajectory.
-
-    Returns
-    -------
-    thetas, a1_len, a2_len : 1-D arrays (sorted by twist angle)
-    """
-    rows: List[Tuple[float, float, float]] = []
-    for grp in angle_groups:
-        paths = list(grp.trajectory_paths)
-        if not paths:
+    dpi: int = 150,
+    enabled: Optional[Dict[str, bool]] = None,
+    arpes_mean_sep_points: Optional[Sequence[ArpesMeanLayerSepPoint]] = None,
+) -> None:
+    """Write all standard mean±std vs-twist figures (skips disabled stems)."""
+    enabled = enabled or {}
+    stats_list = sorted(stats_list, key=lambda s: s.theta)
+    thetas = np.array([s.theta for s in stats_list], dtype=float)
+    for stem, mean_attr, std_attr, ylabel, color, marker, yeqx in _MEAN_STD_PLOT_SPECS:
+        if not enabled.get(stem, True):
             continue
-        chosen: Optional[Path] = None
-        for traj_path in paths:
-            try:
-                _initial, relaxed = read_both_frames(traj_path)
-            except Exception as exc:
-                print(f"    skip {traj_path.name}: {exc}", file=sys.stderr)
-                continue
-            if _passes_fmax_gate(relaxed, traj_path, fmax_max=fmax_max):
-                chosen = traj_path
-                break
-        if chosen is None:
-            print(
-                f"    cell lengths: no sample with forces ≤ {fmax_max:g} eV/Å "
-                f"at θ={grp.twist_angle:g}°",
-                file=sys.stderr,
-            )
-            continue
-        try:
-            import ase.io
-
-            frames = ase.io.read(str(chosen), index=":")
-            if not isinstance(frames, list):
-                frames = [frames]
-            if len(frames) < 1:
-                raise ValueError(f"{chosen.name}: empty trajectory")
-            atoms = frames[0]
-            a1, a2 = cell_vector_lengths(atoms)
-        except Exception as exc:
-            print(
-                f"    cell lengths failed θ={grp.twist_angle:g}° "
-                f"({chosen.name}): {exc}",
-                file=sys.stderr,
-            )
-            continue
-        rows.append((float(grp.twist_angle), a1, a2))
-
-    if not rows:
-        return (
-            np.array([], dtype=float),
-            np.array([], dtype=float),
-            np.array([], dtype=float),
+        mean = np.array([getattr(s, mean_attr) for s in stats_list], dtype=float)
+        std = np.array([getattr(s, std_attr) for s in stats_list], dtype=float)
+        _plot_mean_std_vs_twist(
+            thetas, mean, std,
+            ylabel=ylabel,
+            out_path=out_dir / f"{stem}.png",
+            color=color,
+            marker=marker,
+            reference_y_equals_x=yeqx,
+            dpi=dpi,
+            arpes_mean_sep_points=(
+                arpes_mean_sep_points
+                if stem == "mean_layer_sep_vs_twist_angle"
+                else None
+            ),
         )
-    rows.sort(key=lambda r: r[0])
-    thetas = np.array([r[0] for r in rows], dtype=float)
-    a1_len = np.array([r[1] for r in rows], dtype=float)
-    a2_len = np.array([r[2] for r in rows], dtype=float)
-    return thetas, a1_len, a2_len
+
+
+def _plot_elastic_group_vs_twist(
+    stats_list: List[AngleStats],
+    coeff_indices: Sequence[int],
+    *,
+    ylabel: str,
+    out_path: Path,
+    dpi: int = 150,
+    tem_pld_points: Optional[Sequence[TemPldA1Point]] = None,
+) -> None:
+    """Plot mean ± std for a group of elastic coefficients ``A_i`` vs twist."""
+    stats_list = sorted(stats_list, key=lambda s: s.theta)
+    thetas = np.array([s.theta for s in stats_list], dtype=float)
+    colors = ("C0", "C1", "C8")
+    markers = ("o", "s", "^")
+
+    fig, ax = plt.subplots(figsize=(7.0, 4.5))
+    xlabel = r"Initial twist angle $\theta$ (°)"
+    has_curve = False
+
+    for idx, color, marker in zip(coeff_indices, colors, markers):
+        mean = np.array(
+            [s.elastic_mean[idx - 1] for s in stats_list], dtype=float,
+        )
+        std = np.array(
+            [s.elastic_std[idx - 1] for s in stats_list], dtype=float,
+        )
+        valid = np.isfinite(mean)
+        if not valid.any():
+            continue
+        has_curve = True
+        t_v = thetas[valid]
+        m_v = mean[valid]
+        s_v = std[valid]
+        ax.plot(
+            t_v,
+            m_v,
+            f"{marker}-",
+            color=color,
+            label=rf"$A_{{{idx}}}$",
+        )
+        ax.fill_between(
+            t_v,
+            m_v - s_v,
+            m_v + s_v,
+            color=color,
+            alpha=0.25,
+        )
+
+    if tem_pld_points and 1 in coeff_indices:
+        overlay_tem_pld_A1(ax, tem_pld_points)
+
+    if has_curve or tem_pld_points:
+        ax.legend(prop={"family": CSFONT["fontname"], "size": LEGEND_FONTSIZE})
+
+    ax.set_xlabel(xlabel, fontdict=CSFONT)
+    ax.set_ylabel(ylabel, fontdict=CSFONT)
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Wrote {out_path}", flush=True)
+
+
+def write_elastic_basis_group_figures(
+    stats_list: List[AngleStats],
+    out_dir: Path,
+    *,
+    dpi: int = 150,
+    tem_pld_points: Optional[Sequence[TemPldA1Point]] = None,
+) -> None:
+    """Write the four elastic-basis coefficient-group figures."""
+    for stem, coeff_indices, ylabel in _ELASTIC_GROUP_SPECS:
+        _plot_elastic_group_vs_twist(
+            stats_list,
+            coeff_indices,
+            ylabel=ylabel,
+            out_path=out_dir / f"{stem}.png",
+            dpi=dpi,
+            tem_pld_points=(
+                tem_pld_points if coeff_indices == (1, 2, 3) else None
+            ),
+        )
+
+
+def _rel_uncertainty(
+    mean: np.ndarray,
+    std: np.ndarray,
+    *,
+    offset: float | np.ndarray = 0.0,
+) -> np.ndarray:
+    """Relative uncertainty ``σ / |μ − offset|``; NaN where the denom is ~0."""
+    mean = np.asarray(mean, dtype=float)
+    std = np.asarray(std, dtype=float)
+    denom = mean - np.asarray(offset, dtype=float)
+    out = np.full_like(mean, np.nan, dtype=float)
+    ok = np.isfinite(mean) & np.isfinite(std) & np.isfinite(denom) & (np.abs(denom) > 1e-15)
+    out[ok] = std[ok] / np.abs(denom[ok])
+    return out
+
+
+def plot_rel_uncertainty_vs_twist(
+    stats_list: List[AngleStats],
+    out_path: Path,
+    dpi: int = 150,
+    *,
+    aa_eq_sep: float = AA_EQ_LAYER_SEP,
+    ab_eq_sep: float = AB_EQ_LAYER_SEP,
+) -> None:
+    """Relative uncertainty vs twist for the main structural metrics.
+
+    AA/AB layer separations use ``σ / |μ − d_eq|`` with the primitive
+    untwisted bilayer equilibria ``aa_eq_sep`` / ``ab_eq_sep``.  Local
+    twist at AA uses ``σ / |μ − θ_initial|``.  Other quantities use
+    ``σ / |μ|``.
+
+    Colors and markers match the individual mean±std figures:
+    AA sep (C0), AB sep (C1), local twist (C2), DW width (C3),
+    max intralayer disp (C6).
+    """
+    stats_list = sorted(stats_list, key=lambda s: s.theta)
+    thetas = np.array([s.theta for s in stats_list], dtype=float)
+
+    # offset: scalar equilibrium / zero, or None → use θ_initial per point
+    series = [
+        ("AA layer separation", "aa_sep_mean", "aa_sep_std", "C0", "o", float(aa_eq_sep)),
+        ("AB layer separation", "ab_sep_mean", "ab_sep_std", "C1", "s", float(ab_eq_sep)),
+        ("twist angle at AA stacking", "lt_mean", "lt_std", "C2", "o", None),
+        ("domain wall width", "dw_mean", "dw_std", "C3", "D", 0.0),
+        ("max intralayer disp. mag.", "max_disp_mean", "max_disp_std", "C6", "v", 0.0),
+    ]
+
+    fig, ax = plt.subplots(figsize=(7.0, 4.5))
+    xlabel = r"Initial twist angle $\theta$ (°)"
+    for label, mean_attr, std_attr, color, marker, offset in series:
+        mean = np.array([getattr(s, mean_attr) for s in stats_list], dtype=float)
+        std = np.array([getattr(s, std_attr) for s in stats_list], dtype=float)
+        off = thetas if offset is None else offset
+        rel = _rel_uncertainty(mean, std, offset=off)
+        valid = np.isfinite(rel)
+        if not valid.any():
+            continue
+        ax.plot(
+            thetas[valid],
+            rel[valid],
+            f"{marker}-",
+            color=color,
+            label=label,
+        )
+
+    ax.set_xlabel(xlabel, fontdict=CSFONT)
+    ax.set_ylabel(r"rel. uncertainty", fontdict=CSFONT)
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Wrote {out_path}", flush=True)
 
 
 def plot_cell_vector_lengths_vs_twist(
-    angle_groups: List[EnsembleGroup],
+    stats_list: List[AngleStats],
     out_path: Path,
     dpi: int = 150,
-    *,
-    fmax_max: float = DEFAULT_FMAX_MAX,
 ) -> None:
-    """Plot ``|a₁|`` and ``|a₂|`` vs twist angle (first gated sample per angle)."""
-    thetas, a1_len, a2_len = collect_cell_lengths_first_sample(
-        angle_groups, fmax_max=fmax_max,
-    )
+    """Plot ``|a₁|`` and ``|a₂|`` vs twist from lengths captured during stats."""
+    stats_list = sorted(stats_list, key=lambda s: s.theta)
+    thetas = np.array([s.theta for s in stats_list], dtype=float)
+    a1_len = np.array([s.a1_len for s in stats_list], dtype=float)
+    a2_len = np.array([s.a2_len for s in stats_list], dtype=float)
+
     fig, ax = plt.subplots(figsize=(7.0, 4.5))
     xlabel = r"Initial twist angle $\theta$ (°)"
-
-    if thetas.size:
+    valid = np.isfinite(a1_len) & np.isfinite(a2_len)
+    if valid.any():
         ax.plot(
-            thetas, a1_len, "o-", color="C0",
+            thetas[valid], a1_len[valid], "o-", color="C0",
             label=r"$|\mathbf{a}_1|$",
         )
         ax.plot(
-            thetas, a2_len, "s--", color="C1",
+            thetas[valid], a2_len[valid], "s--", color="C1",
             label=r"$|\mathbf{a}_2|$",
         )
 
     ax.set_xlabel(xlabel, fontdict=CSFONT)
     ax.set_ylabel("lattice vector length (Å)", fontdict=CSFONT)
-    ax.legend(
-        loc="best",
-        prop={"family": CSFONT["fontname"], "size": LEGEND_FONTSIZE},
-    )
     ax.grid(True, alpha=0.3)
+    ax.legend(loc="best", fontsize=LEGEND_FONTSIZE)
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
@@ -1181,6 +1324,15 @@ def main() -> None:
             "Trajectories without saved forces are omitted with a warning."
         ),
     )
+    p.add_argument(
+        "--skip-theta",
+        type=float,
+        nargs="*",
+        default=[1.05, 1.08],
+        metavar="DEG",
+        help="Twist angles (degrees) to omit from all figures. "
+        "Default: 1.05 1.08. Pass with no values to skip none.",
+    )
     p.add_argument("--dpi", type=int, default=150)
     p.add_argument(
         "--no-layer-sep",
@@ -1218,6 +1370,14 @@ def main() -> None:
         help="Skip local twist angle figure.",
     )
     p.add_argument(
+        "--no-rel-uncertainty",
+        action="store_true",
+        help=(
+            "Skip relative-uncertainty overlay vs twist angle "
+            "(AA/AB sep, DW width, local twist, max intralayer disp)."
+        ),
+    )
+    p.add_argument(
         "--no-cell-lengths",
         action="store_true",
         help="Skip cell vector length (|a1|, |a2|) vs twist angle figure.",
@@ -1227,8 +1387,36 @@ def main() -> None:
         action="store_true",
         help=(
             "Skip elastic-plate Fourier coefficient figures "
-            "(top-layer mode-1 A and D)."
+            "(top-layer A₁…A₁₂ grouped into four plots)."
         ),
+    )
+    p.add_argument(
+        "--tem-pld-xlsx",
+        type=Path,
+        default=DEFAULT_TEM_PLD_XLSX,
+        help=(
+            "TEM diffraction PLD data for overlay on the "
+            f"A₁,A₂,A₃ elastic-basis figure (default: {DEFAULT_TEM_PLD_XLSX.name})."
+        ),
+    )
+    p.add_argument(
+        "--no-tem-pld",
+        action="store_true",
+        help="Do not overlay TEM diffraction PLD data on the A₁,A₂,A₃ elastic-basis figure.",
+    )
+    p.add_argument(
+        "--arpes-mean-sep-csv",
+        type=Path,
+        default=DEFAULT_ARPES_MEAN_SEP_CSV,
+        help=(
+            "ARPES mean interlayer separation vs twist for overlay on "
+            f"mean_layer_sep figure (default: {DEFAULT_ARPES_MEAN_SEP_CSV.name})."
+        ),
+    )
+    p.add_argument(
+        "--no-arpes-mean-sep",
+        action="store_true",
+        help="Do not overlay ARPES mean layer separation on the mean sep figure.",
     )
     p.add_argument(
         "--npoints",
@@ -1254,6 +1442,53 @@ def main() -> None:
         p.error(
             "No TBLG relaxation ensembles found under "
             + ", ".join(str(r) for r in roots)
+        )
+
+    skip_theta = [float(t) for t in (args.skip_theta or [])]
+
+    tem_pld_path = Path(args.tem_pld_xlsx)
+    if not tem_pld_path.is_absolute():
+        tem_pld_path = REPO_ROOT / tem_pld_path
+    tem_pld_points: Optional[List[TemPldA1Point]] = None
+    if not args.no_tem_pld:
+        tem_pld_points = load_tem_pld_A1_data(tem_pld_path)
+        if tem_pld_points:
+            print(
+                f"Loaded {len(tem_pld_points)} TEM PLD A₁ point(s) from {tem_pld_path}",
+                flush=True,
+            )
+
+    arpes_sep_path = Path(args.arpes_mean_sep_csv)
+    if not arpes_sep_path.is_absolute():
+        arpes_sep_path = REPO_ROOT / arpes_sep_path
+    arpes_mean_sep_points: Optional[List[ArpesMeanLayerSepPoint]] = None
+    if not args.no_arpes_mean_sep:
+        arpes_mean_sep_points = load_arpes_mean_layer_sep_data(arpes_sep_path)
+        if arpes_mean_sep_points:
+            print(
+                f"Loaded {len(arpes_mean_sep_points)} ARPES mean layer sep point(s) "
+                f"from {arpes_sep_path}",
+                flush=True,
+            )
+
+    def _skip_this_theta(theta: float) -> bool:
+        return any(abs(float(theta) - s) < 1e-6 for s in skip_theta)
+
+    n_before = len(groups)
+    skipped = sorted({g.twist_angle for g in groups if _skip_this_theta(g.twist_angle)})
+    groups = [g for g in groups if not _skip_this_theta(g.twist_angle)]
+    if skipped:
+        print(
+            f"Skipping {n_before - len(groups)} ensemble group(s) at θ="
+            + ", ".join(f"{t:g}°" for t in skipped)
+            + ".",
+            flush=True,
+        )
+
+    if not groups:
+        p.error(
+            "No TBLG relaxation ensembles remain after --skip-theta "
+            f"{skip_theta!r}."
         )
 
     print(
@@ -1305,8 +1540,9 @@ def main() -> None:
                 f"max‖Δr‖={st.max_disp_mean:.3f}±{st.max_disp_std:.3f} Å "
                 f"(n={st.max_disp_n})  "
                 f"local θ={st.lt_mean:.3f}±{st.lt_std:.3f}° (n={st.lt_n})  "
-                f"A₁={st.A1_mean:.4g}±{st.A1_std:.4g} (n={st.A1_n})  "
-                f"D₁={st.D1_mean:.4g}±{st.D1_std:.4g} (n={st.D1_n})",
+                f"A₁={st.elastic_mean[0]:.4g}±{st.elastic_std[0]:.4g}  "
+                f"A₁₀={st.elastic_mean[9]:.4g}±{st.elastic_std[9]:.4g} "
+                f"(n={st.elastic_n})",
                 flush=True,
             )
 
@@ -1317,77 +1553,39 @@ def main() -> None:
         out_dir = angle_groups[0].directory.parent
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        if not args.no_layer_sep:
-            plot_aa_layer_sep_vs_twist(
+        enabled = {
+            "aa_layer_sep_vs_twist_angle": not args.no_layer_sep,
+            "ab_layer_sep_vs_twist_angle": not args.no_layer_sep,
+            "mean_layer_sep_vs_twist_angle": not args.no_mean_layer_sep,
+            "mean_z_vs_twist_angle": not args.no_mean_z,
+            "corrugation_amplitude_vs_twist_angle": not args.no_corrugation,
+            "dw_width_vs_twist_angle": not args.no_dw_width,
+            "max_intralayer_disp_vs_twist_angle": not args.no_max_intralayer_disp,
+            "local_twist_vs_twist_angle": not args.no_local_twist,
+        }
+        write_mean_std_figures(
+            stats_list, out_dir, dpi=args.dpi, enabled=enabled,
+            arpes_mean_sep_points=arpes_mean_sep_points,
+        )
+        if not args.no_elastic_basis:
+            write_elastic_basis_group_figures(
                 stats_list,
-                out_path=out_dir / "aa_layer_sep_vs_twist_angle.png",
+                out_dir,
                 dpi=args.dpi,
-            )
-            plot_ab_layer_sep_vs_twist(
-                stats_list,
-                out_path=out_dir / "ab_layer_sep_vs_twist_angle.png",
-                dpi=args.dpi,
-            )
-
-        if not args.no_mean_layer_sep:
-            plot_mean_layer_sep_vs_twist(
-                stats_list,
-                out_path=out_dir / "mean_layer_sep_vs_twist_angle.png",
-                dpi=args.dpi,
-            )
-
-        if not args.no_mean_z:
-            plot_mean_z_vs_twist(
-                stats_list,
-                out_path=out_dir / "mean_z_vs_twist_angle.png",
-                dpi=args.dpi,
+                tem_pld_points=tem_pld_points,
             )
 
-        if not args.no_corrugation:
-            plot_corrugation_amplitude_vs_twist(
+        if not args.no_rel_uncertainty:
+            plot_rel_uncertainty_vs_twist(
                 stats_list,
-                out_path=out_dir / "corrugation_amplitude_vs_twist_angle.png",
-                dpi=args.dpi,
-            )
-
-        if not args.no_dw_width:
-            plot_dw_width_vs_twist(
-                stats_list,
-                out_path=out_dir / "dw_width_vs_twist_angle.png",
-                dpi=args.dpi,
-            )
-
-        if not args.no_max_intralayer_disp:
-            plot_max_intralayer_disp_vs_twist(
-                stats_list,
-                out_path=out_dir / "max_intralayer_disp_vs_twist_angle.png",
-                dpi=args.dpi,
-            )
-
-        if not args.no_local_twist:
-            plot_local_twist_vs_theta(
-                stats_list,
-                out_path=out_dir / "local_twist_vs_twist_angle.png",
+                out_path=out_dir / "rel_uncertainty_vs_twist_angle.png",
                 dpi=args.dpi,
             )
 
         if not args.no_cell_lengths:
             plot_cell_vector_lengths_vs_twist(
-                angle_groups,
+                stats_list,
                 out_path=out_dir / "cell_vector_lengths_vs_twist_angle.png",
-                dpi=args.dpi,
-                fmax_max=args.fmax_max,
-            )
-
-        if not args.no_elastic_basis:
-            plot_elastic_inplane_A_mode1_vs_twist(
-                stats_list,
-                out_path=out_dir / "elastic_inplane_A_mode1_vs_twist_angle.png",
-                dpi=args.dpi,
-            )
-            plot_elastic_outplane_D_mode1_vs_twist(
-                stats_list,
-                out_path=out_dir / "elastic_outplane_D_mode1_vs_twist_angle.png",
                 dpi=args.dpi,
             )
 

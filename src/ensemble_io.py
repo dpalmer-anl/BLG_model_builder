@@ -125,6 +125,8 @@ def metrics_npz_path(
     technique: str,
     target: str,
 ) -> str:
+    if not target:
+        target = detect_target_from_model_name(model_name) or "energy"
     safe = re.sub(r"[^\w.\-]+", "_", model_name)
     return os.path.join(
         metrics_dir,

@@ -29,6 +29,10 @@ from run_uq_propagation_relaxation import (
     DEFAULT_RELAX_MIN_STYLE as RELAX_DEFAULT_MIN_STYLE,
     pending_relaxation_sample_indices,
 )
+from uq_model_runtime import (
+    pod_ensemble_name_for_extep_ilp,
+    pod_ensemble_name_for_lj_continuum,
+)
 
 
 MCMC_TASK_LIST_DIR = "mcmc_task_lists"
@@ -118,8 +122,13 @@ def _relaxation_job_pending_count(
     ``run_uq_propagation_relaxation.py`` (min miscalibration-area T).
     Pending = missing traj, or existing final frame above ``ftol``.
     """
+    ensemble_model = model_name
+    if str(model_name).startswith("POD+extep+ILP"):
+        ensemble_model = pod_ensemble_name_for_extep_ilp(model_name)
+    elif str(model_name).startswith("POD+LJ_continuum"):
+        ensemble_model = pod_ensemble_name_for_lj_continuum(model_name)
     _pkl, t_used = resolve_ensemble_pickle(
-        model_name,
+        ensemble_model,
         ensemble_dir,
         temperature=None,
         calibration_metrics_dir=calibration_metrics_dir,
@@ -433,11 +442,16 @@ def submit_batch_file_aurora(executable,batch_options,
 
 if __name__=="__main__":
 
-    mcmc_uq = True
+    mcmc_uq = False
     cv_uq = False
     relaxation = False
+    lj_substrate_relaxation = False
     allegro_relaxation = False
     band_structure = False
+    mean_relax_tb_uq_bands = True
+    relax_uq_mean_tb_bands = True
+    bands_kgrid = True
+    arpes_band_gap_comparison = False
     rerelax = False
     batch_options_uiuc_cc= {
                  '--partition':'qmchamm',
@@ -575,7 +589,7 @@ if __name__=="__main__":
         relaxation_model = "POD_energy_POD_index_15_8bb97b2162397248"
         uq_arr = ["mcmc"]  # ,"cv"]
         ntasks = 32
-        twist_angle = np.array([0.83, 0.88, 0.93, 0.99, 1.05, 1.08, 1.12, 1.16, 1.2, 1.47])
+        twist_angle = np.array([0.6616, 0.7351, 0.83, 0.88, 0.93, 0.99, 1.05, 1.08, 1.12, 1.16, 1.2, 1.47])
 
         model_names = [relaxation_model]
         print(
@@ -624,6 +638,59 @@ if __name__=="__main__":
                 #exit()
                 #subprocess.call(executable,shell=True)
 
+    if lj_substrate_relaxation:
+        # POD (C–C) + fixed continuum LJ hBN bulk substrate.
+        # Reuses the POD_energy MCMC ensemble; continuum ε,σ,q stay fixed.
+        relaxation_model = "POD+LJ_continuum"
+        uq_arr = ["mcmc"]
+        ntasks = 32
+        twist_angle = np.array([0.6616, 0.7351, 0.83, 0.88, 0.93, 0.99, 1.05, 1.08, 1.12, 1.16, 1.2, 1.47])
+
+        model_names = [relaxation_model]
+        print(
+            f"[lj-substrate relaxation] submitting model {relaxation_model} "
+            f"(skip only trajs with fmax≤{RELAX_DEFAULT_FTOL:g}; "
+            f"else resume from last frame)",
+            flush=True,
+        )
+        for mt in model_names:
+            for t in twist_angle:
+                # Pending check uses underlying POD ensemble folder name.
+                n_pending, t_label = _relaxation_job_pending_count(mt, float(t))
+                if n_pending <= 0:
+                    print(
+                        f"[lj-substrate relaxation] skip {mt} θ={t:g}° T={t_label}: "
+                        f"all {RELAX_DEFAULT_N_SAMPLES} trajectories meet "
+                        f"ftol={RELAX_DEFAULT_FTOL:g}",
+                        flush=True,
+                    )
+                    continue
+                print(
+                    f"[lj-substrate relaxation] queue {mt} θ={t:g}° T={t_label}: "
+                    f"{n_pending}/{RELAX_DEFAULT_N_SAMPLES} samples pending "
+                    f"(missing or fmax>{RELAX_DEFAULT_FTOL:g})",
+                    flush=True,
+                )
+                hyper_param_str = mt + "_ljsub_a_" + str(t)
+
+                batch_options["--ntasks"] = ntasks
+                batch_options["--cpus-per-task"] = 1
+                batch_options["--output"] = hyper_param_str + ".log"
+                batch_options["--job-name"] = hyper_param_str
+                executable = (
+                    f"srun python run_uq_propagation_relaxation.py "
+                    f"--models {mt} --twist-angle {t} "
+                    f"--with-lj-substrate "
+                    f"--relax-backend {RELAX_DEFAULT_BACKEND} "
+                    f"--relax-min-style {RELAX_DEFAULT_MIN_STYLE} "
+                    f"--relax-etol {RELAX_DEFAULT_ETOL:g} "
+                    f"--relax-ftol {RELAX_DEFAULT_FTOL:g} "
+                    f"--relax-maxiter {RELAX_DEFAULT_MAXITER} "
+                    f"--relax-maxeval {RELAX_DEFAULT_MAXEVAL}\n"
+                )
+                print(executable)
+                submit_batch_file_uiuc_cc(executable, batch_options)
+
     if allegro_relaxation:
         # One Slurm job per twist; uses allegro_env (nequip/allegro/torch).
         # Fit is auto-skipped when allegro_blg_rcut6 already has a checkpoint.
@@ -671,11 +738,16 @@ if __name__=="__main__":
             #exit()
         print("njobs = ",njobs)
 
+    _BANDS_TWIST = np.array([0.83,0.88,0.93,0.99,1.05,1.08,1.12,1.16,1.2,1.47])
+    _BANDS_RELAX_MODEL = "POD_energy_POD_index_15_8bb97b2162397248"
+    _BANDS_TB_MODEL = "ACSF_hoppings_sk_M_9_W_6"
+
     if band_structure:
+        batch_options = batch_options_delta
         uq_arr = ["mcmc"] #
-        twist_angle = np.array([0.83,0.88,0.93,0.99,1.05,1.08,1.12,1.16,1.2,1.47])
-        relaxation_model = "POD_energy_POD_index_0_09fdb1c2b98eb30e"
-        tb_model = "ACSF_hoppings_sk_M_12_W_6"
+        twist_angle = np.array([0.83, 0.88,0.99,1.05,1.08,1.12]) # _BANDS_TWIST
+        relaxation_model = _BANDS_RELAX_MODEL
+        tb_model = _BANDS_TB_MODEL
         for t in twist_angle:
             hyper_param_str = relaxation_model+"_tb_"+tb_model+"_a_"+str(t)
 
@@ -687,6 +759,100 @@ if __name__=="__main__":
             #exit()
 
 
-    
+    if mean_relax_tb_uq_bands:
+        batch_options = batch_options_delta
+        # Mean POD geometry × full TB hopping ensemble (min-miscalibration T).
+        twist_angle = np.array([0.99])
+        relaxation_model = _BANDS_RELAX_MODEL
+        tb_model = _BANDS_TB_MODEL
+        for t in twist_angle:
+            hyper_param_str = "mean_relax_tb_uq_"+relaxation_model+"_tb_"+tb_model+"_a_"+str(t)
+            executable = (
+                "python run_uq_propagation_bands.py"
+                " --models "+relaxation_model
+                +" --tb-model "+tb_model
+                +" --twist-angle "+str(t)
+                +" --mean-structure"
+                +" --output-dir bands/propagation_mean_relax\n"
+            )
+            batch_options["--job-name"] = hyper_param_str
+            batch_options["--output"] = hyper_param_str+".log"
+            batch_options["--ntasks"] = 1
+            print(executable)
+            submit_batch_file_delta(executable, batch_options)
 
+    if relax_uq_mean_tb_bands:
+        batch_options = batch_options_delta
+        # POD relaxation ensemble × mean TB hopping parameters (min-miscalibration T).
+        twist_angle = np.array([0.99])
+        relaxation_model = _BANDS_RELAX_MODEL
+        tb_model = _BANDS_TB_MODEL
+        for t in twist_angle:
+            hyper_param_str = "relax_uq_mean_tb_"+relaxation_model+"_tb_"+tb_model+"_a_"+str(t)
+            executable = (
+                "python run_uq_propagation_bands.py"
+                " --models "+relaxation_model
+                +" --tb-model "+tb_model
+                +" --twist-angle "+str(t)
+                +" --mean-tb"
+                +" --output-dir bands/propagation_mean_tb\n"
+            )
+            batch_options["--job-name"] = hyper_param_str
+            batch_options["--output"] = hyper_param_str+".log"
+            batch_options["--ntasks"] = 1
+            print(executable)
+            submit_batch_file_delta(executable, batch_options)
+
+    if bands_kgrid:
+        # Ensemble geometry × ensemble TB on a 10×10×1 mesh; save Fermi-window evecs.
+        batch_options = batch_options_delta
+        twist_angle = _BANDS_TWIST
+        relaxation_model = _BANDS_RELAX_MODEL
+        tb_model = _BANDS_TB_MODEL
+        for t in twist_angle:
+            hyper_param_str = "bands_kgrid_"+relaxation_model+"_tb_"+tb_model+"_a_"+str(t)
+            executable = (
+                "python run_uq_propagation_bands.py"
+                " --models "+relaxation_model
+                +" --tb-model "+tb_model
+                +" --twist-angle "+str(t)
+                +" --k-mesh 10 10 1"
+                +" --save-eigenvectors"
+                +" --compressed"
+                +" --output-dir bands/propagation_kgrid\n"
+            )
+            batch_options["--job-name"] = hyper_param_str
+            batch_options["--output"] = hyper_param_str+".log"
+            batch_options["--ntasks"] = 1
+            print(executable)
+            submit_batch_file_delta(executable, batch_options)
+
+    if arpes_band_gap_comparison:
+        # ARPES ky line scan (Cartesian k) for band-gap comparison at selected θ.
+        batch_options = batch_options_delta
+        twist_angle = np.array([0.99, 1.05, 1.08, 1.12, 1.16, 1.2, 1.47, 1.89, 2.88])
+        relaxation_model = _BANDS_RELAX_MODEL
+        tb_model = _BANDS_TB_MODEL
+        for t in twist_angle:
+            hyper_param_str = (
+                "arpes_band_gap_"+relaxation_model+"_tb_"+tb_model+"_a_"+str(t)
+            )
+            executable = (
+                "python run_uq_propagation_bands.py"
+                " --models "+relaxation_model
+                +" --tb-model "+tb_model
+                +" --twist-angle "+str(t)
+                +" --arpes-ky-path"
+                +" --energy-window-ev 2.0"
+                +" --compressed"
+                +" --output-dir bands/arpes_band_gap\n"
+            )
+            batch_options["--job-name"] = hyper_param_str
+            batch_options["--output"] = hyper_param_str+".log"
+            batch_options["--ntasks"] = 1
+            print(executable)
+            submit_batch_file_delta(executable, batch_options)
+
+
+    
 

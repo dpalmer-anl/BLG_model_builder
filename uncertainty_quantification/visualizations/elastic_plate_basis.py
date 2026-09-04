@@ -264,18 +264,24 @@ def apply_mode1_corrugation(
     return out
 
 
-def top_layer_mode1_A_D(
+def top_layer_elastic_coeffs(
     initial,
     relaxed,
     *,
     num_mode: int = 3,
-) -> tuple[float, float]:
-    """Mode-1 in-plane ``A`` and out-of-plane ``D`` for the top layer (Å).
+) -> np.ndarray:
+    """Return top-layer elastic-plate Fourier coefficients ``A1…A12`` (Å).
+
+    With ``num_mode=3`` the layout is:
+
+    * ``A1–A3`` — in-plane sin (modes 1–3)
+    * ``A4–A6`` — in-plane cos (modes 1–3)
+    * ``A7–A9`` — out-of-plane sin (modes 1–3)
+    * ``A10–A12`` — out-of-plane cos (modes 1–3)
 
     Layer assignment and reference coordinates use the **initial** (unrelaxed)
-    frame; displacements are the minimum-image ``r_relaxed − r_initial``
-    (in-plane PBC).  ``L_AA = |a₁|`` from the initial cell, matching
-    ``basis_coeff.py``.
+    frame; displacements are the minimum-image ``r_relaxed − r_initial``.
+    ``L_AA = |a₁|`` from the initial cell.
     """
     from ase.geometry import find_mic
 
@@ -305,6 +311,24 @@ def top_layer_mode1_A_D(
     uy = mic_disp[top, 1]
     uz = mic_disp[top, 2]
 
-    A, _B = in_plane(x, y, ux, uy, L_AA, num_mode=num_mode)
-    _C, D = out_of_plane(x, y, uz, L_AA, num_mode=num_mode)
-    return float(A[0]), float(D[0])
+    A_sin, B_cos = in_plane(x, y, ux, uy, L_AA, num_mode=num_mode)
+    C_sin, D_cos = out_of_plane(x, y, uz, L_AA, num_mode=num_mode)
+    return np.concatenate(
+        (
+            np.asarray(A_sin[:num_mode], dtype=float),
+            np.asarray(B_cos[:num_mode], dtype=float),
+            np.asarray(C_sin[:num_mode], dtype=float),
+            np.asarray(D_cos[:num_mode], dtype=float),
+        )
+    )
+
+
+def top_layer_mode1_A_D(
+    initial,
+    relaxed,
+    *,
+    num_mode: int = 3,
+) -> tuple[float, float]:
+    """Mode-1 in-plane ``A`` (``A1``) and out-of-plane ``D`` (``A10``) for the top layer (Å)."""
+    coeffs = top_layer_elastic_coeffs(initial, relaxed, num_mode=num_mode)
+    return float(coeffs[0]), float(coeffs[3 * num_mode])

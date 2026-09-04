@@ -1,0 +1,74 @@
+Loaded POD best-fit: POD_energy_61_reg1e-12_8bb97b2162397248_best_fit_params.npz  (ncoeff=61, rcut=7 Å)
+
+Building TBLG/hBN stack θ=9.43°  a=2.4694 Å …
+  natoms=222  species=['B', 'C', 'N']  mol-ids=[1, 2, 3]
+Stacking scan: 21×21 = 441 evaluations …
+  row sy=0.000 done
+  row sy=0.048 done
+  row sy=0.095 done
+  row sy=0.143 done
+  row sy=0.190 done
+  row sy=0.238 done
+  row sy=0.286 done
+  row sy=0.333 done
+  row sy=0.381 done
+  row sy=0.429 done
+  row sy=0.476 done
+  row sy=0.524 done
+  row sy=0.571 done
+  row sy=0.619 done
+  row sy=0.667 done
+  row sy=0.714 done
+  row sy=0.762 done
+  row sy=0.810 done
+  row sy=0.857 done
+  row sy=0.905 done
+  row sy=0.952 done
+
+Best stacking (graphene primitive fractions): sx=0.571429, sy=0.000000  E=-171.725819 eV/atom
+Wrote /mnt/c/Users/Daniel/Documents/research/BLG_model_builder/uncertainty_quantification/figures/tblg_hbn_stacking_energy_contour.png
+Lattice scan: 31 points around 2.4694 Å …
+  a=2.4000 Å  E=-171.657171 eV/atom
+  a=2.4050 Å  E=-171.665964 eV/atom
+  a=2.4100 Å  E=-171.674131 eV/atom
+  a=2.4150 Å  E=-171.681680 eV/atom
+  a=2.4200 Å  E=-171.688619 eV/atom
+  a=2.4250 Å  E=-171.694955 eV/atom
+  a=2.4300 Å  E=-171.700694 eV/atom
+  a=2.4350 Å  E=-171.705844 eV/atom
+  a=2.4400 Å  E=-171.710411 eV/atom
+  a=2.4450 Å  E=-171.714403 eV/atom
+  a=2.4500 Å  E=-171.717824 eV/atom
+  a=2.4550 Å  E=-171.720682 eV/atom
+  a=2.4600 Å  E=-171.722982 eV/atom
+  a=2.4650 Å  E=-171.724731 eV/atom
+  a=2.4700 Å  E=-171.725934 eV/atom
+  a=2.4750 Å  E=-171.726598 eV/atom
+  a=2.4800 Å  E=-171.726728 eV/atom
+  a=2.4850 Å  E=-171.726330 eV/atom
+  a=2.4900 Å  E=-171.725410 eV/atom
+  a=2.4950 Å  E=-171.723973 eV/atom
+  a=2.5000 Å  E=-171.722025 eV/atom
+  a=2.5050 Å  E=-171.719572 eV/atom
+  a=2.5100 Å  E=-171.716620 eV/atom
+  a=2.5150 Å  E=-171.713176 eV/atom
+  a=2.5200 Å  E=-171.709244 eV/atom
+  a=2.5250 Å  E=-171.704832 eV/atom
+  a=2.5300 Å  E=-171.699947 eV/atom
+  a=2.5350 Å  E=-171.694594 eV/atom
+  a=2.5400 Å  E=-171.688781 eV/atom
+  a=2.5450 Å  E=-171.682514 eV/atom
+  a=2.5500 Å  E=-171.675801 eV/atom
+
+Best lattice constant: a=2.480000 Å  E=-171.726728 eV/atom
+Wrote /mnt/c/Users/Daniel/Documents/research/BLG_model_builder/uncertainty_quantification/figures/tblg_hbn_energy_vs_lattice_constant.png
+
+=== Summary ===
+  twist angle:          9.43°
+  best stacking (sx,sy): (0.571429, 0.000000)
+  lattice constant:     2.480000 Å
+  E(stacking min):      -171.725819 eV/atom
+  E(lattice min):       -171.726728 eV/atom
+Updated constants in /mnt/c/Users/Daniel/Documents/research/BLG_model_builder/uncertainty_quantification/tblg_hbn_geometry.py
+
+Done.

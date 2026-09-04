@@ -18,6 +18,8 @@ from blg_model_builder.lammps_interface import (
     TersoffDRIPLammpsCalculator,
     PODLammpsCalculator,
     PODD3LammpsCalculator,
+    PODExtepILPLammpsCalculator,
+    PODLJContinuumSubstrateLammpsCalculator,
     TETB_PODLammpsCalculator,
 )
 from blg_model_builder.allegro_interface import (
@@ -336,6 +338,39 @@ def build_and_register_uq_runtime_calculator(
         coeffs = _load_pod_coeff_vector("POD_energy", hyperparams, data_kw)
         calc_obj = PODLammpsCalculator(
             hyperparams, coeffs, elements=["C"], cutoff=rcut,
+        )
+        _register_uq_lammps_runtime(calc_obj)
+        return
+
+    if model_name.startswith("POD+extep+ILP") or model_name == "POD+extep+ILP":
+        hyperparams, rcut = _resolve_pod_descriptor_hyperparams(data_kw)
+        coeffs = _load_pod_coeff_vector("POD_energy", hyperparams, data_kw)
+        calc_obj = PODExtepILPLammpsCalculator(
+            hyperparams,
+            coeffs,
+            cutoff=rcut,
+            extep_path=data_kw.get("extep_path"),
+            ilp_path=data_kw.get("ilp_path"),
+        )
+        _register_uq_lammps_runtime(calc_obj)
+        return
+
+    if (
+        model_name.startswith("POD+LJ_continuum")
+        or model_name == "POD+LJ_continuum"
+    ):
+        # Propagation-only hybrid: MCMC ensembles supply POD coeffs;
+        # continuum LJ ε/σ/q are fixed on the calculator.
+        hyperparams, rcut = _resolve_pod_descriptor_hyperparams(data_kw)
+        coeffs = _load_pod_coeff_vector("POD_energy", hyperparams, data_kw)
+        calc_obj = PODLJContinuumSubstrateLammpsCalculator(
+            hyperparams,
+            coeffs,
+            cutoff=rcut,
+            eps=data_kw.get("lj_eps"),
+            sigma=data_kw.get("lj_sigma"),
+            density=data_kw.get("lj_density"),
+            substrate_z=data_kw.get("lj_substrate_z"),
         )
         _register_uq_lammps_runtime(calc_obj)
         return
